@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 3 — Deterministic Test Suite: in progress.
+Phase 4 — Disposable Matrix Integration Environment: in progress.
 
 Phase 0 baseline/inventory is complete for non-destructive capture; checksum
 capture remains explicitly deferred until a safe backup window.
@@ -130,7 +130,7 @@ point; it does not claim that the final TNG adapter has been rebased.
 - Added diagnostics path correction and profile-local public-room handling.
 - Replaced the bundled standalone sender hook with an explicit-config,
   token-only sender so it cannot borrow process-global Matrix credentials.
-- Focused tests currently pass: `6 passed`.
+- Focused Phase 2 tests passed: `8 passed` before Phase 3 additions.
 
 Phase 2 gate passed for the current inherited adapter surface: focused tests
 cover profile snapshots, distinct constructed adapters, serialized legacy-store
@@ -148,6 +148,22 @@ upstream compatibility changes will be assessed by Phase 3 tests.
 4. Complete the inherited-method environment audit and concurrency tests for
    Phase 2. **Done.**
 5. Add the full deterministic test matrix and temporary SQLite/Mautrix tests.
+
+## Phase 3 Progress and Gate
+
+Passed. The suite now has `9 passed` tests covering:
+
+- plugin manifest and registration compatibility;
+- two-adapter profile/path snapshots;
+- scoped-secret authority and missing-secret behavior;
+- serialized legacy store-global lifecycle access;
+- diagnostics path reporting;
+- explicit standalone sender registration;
+- real independent temporary Mautrix SQLite databases;
+- host environment/multiplex-state test hygiene.
+
+Generic gateway routing and duplicate-credential behavior remain covered by the
+upstream Hermes test suite and will be exercised again during Phase 4.
 
 ## Deployment State
 
