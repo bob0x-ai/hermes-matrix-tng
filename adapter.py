@@ -46,6 +46,7 @@ def _profile_env_scope(settings: MatrixProfileSettings):
     """Temporarily provide legacy raw-env reads with this profile's values."""
     values = {
         "MATRIX_RECOVERY_KEY": settings.recovery_key,
+        "MATRIX_RECOVERY_KEY_OUTPUT_FILE": settings.recovery_key_output_file,
         "MATRIX_ALLOW_PUBLIC_ROOMS": "true" if settings.allow_public_rooms else "false",
     }
     previous = {key: os.environ.get(key) for key in values}
@@ -153,6 +154,59 @@ def _build_adapter(config):
     return MatrixAdapter(config)
 
 
+async def _standalone_send(
+    pconfig,
+    chat_id,
+    message,
+    *,
+    thread_id=None,
+    media_files=None,
+    force_document=False,
+):
+    """Profile-explicit standalone Matrix delivery.
+
+    This path is intentionally small and token-only. Password login and E2EE
+    standalone delivery remain live-adapter responsibilities; a cron job must
+    not create a second crypto client for the same account.
+    """
+    import time
+    from urllib.parse import quote
+
+    try:
+        import aiohttp
+    except ImportError:
+        return {"error": "aiohttp not installed. Run: pip install aiohttp"}
+    extra = getattr(pconfig, "extra", {}) or {}
+    homeserver = str(extra.get("homeserver", "")).rstrip("/")
+    token = str(getattr(pconfig, "token", None) or "")
+    if not homeserver or not token:
+        return {"error": "Matrix standalone delivery requires explicit homeserver and access token"}
+    url = f"{homeserver}/_matrix/client/v3/rooms/{quote(str(chat_id), safe='')}/send/m.room.message/{int(time.time() * 1000)}"
+    payload = {"msgtype": "m.text", "body": str(message)}
+    try:
+        import markdown as markdown_lib
+        payload["format"] = "org.matrix.custom.html"
+        payload["formatted_body"] = markdown_lib.markdown(
+            str(message), extensions=["fenced_code", "tables"]
+        )
+    except ImportError:
+        pass
+    try:
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.put(
+                url,
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json=payload,
+            ) as response:
+                if response.status not in {200, 201}:
+                    return {"error": f"Matrix API error ({response.status}): {await response.text()}"}
+                data = await response.json()
+        return {"success": True, "platform": "matrix", "chat_id": chat_id, "message_id": data.get("event_id")}
+    except Exception as exc:
+        return {"error": f"Matrix send failed: {exc}"}
+
+
 class _RegistrationContext:
     def __init__(self, context):
         self._context = context
@@ -162,6 +216,7 @@ class _RegistrationContext:
 
     def register_platform(self, *args, **kwargs):
         kwargs["adapter_factory"] = _build_adapter
+        kwargs["standalone_sender_fn"] = _standalone_send
         return self._context.register_platform(*args, **kwargs)
 
 

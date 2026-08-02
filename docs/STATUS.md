@@ -128,6 +128,8 @@ point; it does not claim that the final TNG adapter has been rebased.
 - Added lifecycle serialization around legacy bundled methods that still read
   module-level store globals; paths are restored after each operation.
 - Added diagnostics path correction and profile-local public-room handling.
+- Replaced the bundled standalone sender hook with an explicit-config,
+  token-only sender so it cannot borrow process-global Matrix credentials.
 - Focused tests currently pass: `6 passed`.
 
 This is not yet the Phase 2 gate: raw environment reads in inherited runtime

@@ -24,9 +24,11 @@ at adapter construction; values must not be read from process-global
   operation and must be made profile-local before automatic bootstrap is used.
 - `MATRIX_MAX_MESSAGE_LENGTH`: construction-time fallback remains in the
   bundled superclass; TNG overwrites the resolved instance value afterward.
-- plugin `check_matrix_requirements` and standalone sender reads: these run
-  outside the long-lived adapter and need profile-aware wrappers before relying
-  on them in multiplex mode.
+- plugin `check_matrix_requirements` still runs outside the long-lived adapter
+  and needs a profile-aware wrapper before relying on it in multiplex mode.
+- standalone sender reads are now handled by TNG's explicit config/token-only
+  sender; password-login and E2EE standalone delivery remain intentionally
+  unsupported and should route through the live adapter.
 - any future Matrix environment variable added upstream: compatibility tests
   must fail or the variable must be classified here.
 

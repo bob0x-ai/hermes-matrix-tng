@@ -55,6 +55,7 @@ def test_registration_replaces_only_the_adapter_factory():
     assert calls["name"] == "matrix"
     assert calls["adapter_factory"] is not bundled._build_adapter
     assert calls["adapter_factory"] is not None
+    assert calls["standalone_sender_fn"] is tng._standalone_send
 
 
 def test_adapter_constructor_snapshots_profile_store_path(monkeypatch, tmp_path):
@@ -82,3 +83,32 @@ def test_adapter_constructor_snapshots_profile_store_path(monkeypatch, tmp_path)
     assert diagnostics["e2ee"]["crypto_store_path"].endswith(
         "profile/platforms/matrix/store/crypto.db"
     )
+
+
+def test_two_adapters_keep_distinct_paths_after_construction(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    tng = _load_tng_adapter()
+
+    def config(user, device):
+        return SimpleNamespace(
+            token=f"token-{user}",
+            api_key=None,
+            extra={
+                "homeserver": "https://example.invalid",
+                "user_id": f"@{user}:example.invalid",
+                "device_id": device,
+                "e2ee_mode": "off",
+            },
+        )
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "first"))
+    first = tng.MatrixAdapter(config("first", "FIRST"))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "second"))
+    second = tng.MatrixAdapter(config("second", "SECOND"))
+
+    assert first.profile_settings.crypto_db_path != second.profile_settings.crypto_db_path
+    assert first.profile_settings.crypto_db_path.parent.name == "store"
+    assert second.profile_settings.crypto_db_path.parent.name == "store"
+    assert first._device_id == "FIRST"
+    assert second._device_id == "SECOND"

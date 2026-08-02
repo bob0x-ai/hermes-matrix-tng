@@ -55,6 +55,7 @@ class MatrixProfileSettings:
     device_id: str
     e2ee_mode: str
     recovery_key: str
+    recovery_key_output_file: str
     allowed_users: tuple[str, ...]
     allowed_rooms: tuple[str, ...]
     free_response_rooms: tuple[str, ...]
@@ -129,6 +130,7 @@ def resolve_matrix_profile_settings(config: Any, profile_home: str | Path | None
         device_id=device_id,
         e2ee_mode=e2ee_mode,
         recovery_key=_secret("MATRIX_RECOVERY_KEY", ""),
+        recovery_key_output_file=_secret("MATRIX_RECOVERY_KEY_OUTPUT_FILE", ""),
         allowed_users=_as_csv(value("allowed_users", "MATRIX_ALLOWED_USERS", "")),
         allowed_rooms=_as_csv(value("allowed_rooms", "MATRIX_ALLOWED_ROOMS", "")),
         free_response_rooms=_as_csv(value("free_response_rooms", "MATRIX_FREE_RESPONSE_ROOMS", "")),
