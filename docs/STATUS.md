@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 2 — Profile Isolation Implementation: in progress.
+Phase 3 — Deterministic Test Suite: in progress.
 
 Phase 0 baseline/inventory is complete for non-destructive capture; checksum
 capture remains explicitly deferred until a safe backup window.
@@ -132,9 +132,10 @@ point; it does not claim that the final TNG adapter has been rebased.
   token-only sender so it cannot borrow process-global Matrix credentials.
 - Focused tests currently pass: `6 passed`.
 
-This is not yet the Phase 2 gate: raw environment reads in inherited runtime
-methods and concurrent lifecycle behavior still need explicit coverage and
-further reduction before merging this phase.
+Phase 2 gate passed for the current inherited adapter surface: focused tests
+cover profile snapshots, distinct constructed adapters, serialized legacy-store
+lifecycle paths, diagnostics, and explicit standalone delivery. Remaining
+upstream compatibility changes will be assessed by Phase 3 tests.
 
 ## Next Actions
 
@@ -145,7 +146,8 @@ further reduction before merging this phase.
 3. Classify upstream environment reads into scoped secrets versus behavior
    settings.
 4. Complete the inherited-method environment audit and concurrency tests for
-   Phase 2.
+   Phase 2. **Done.**
+5. Add the full deterministic test matrix and temporary SQLite/Mautrix tests.
 
 ## Deployment State
 
