@@ -1,0 +1,23 @@
+name: matrix-platform
+label: Matrix
+kind: platform
+version: 0.1.0-tng
+description: >
+  Hermes Matrix TNG compatibility skeleton. This project currently delegates
+  to the recorded bundled Matrix adapter and is not deployed. Future phases
+  will add profile-isolated state and configuration handling.
+author: Local Hermes Operations
+requires_env:
+  - name: MATRIX_HOMESERVER
+    description: "Matrix homeserver URL"
+    prompt: "Matrix homeserver URL"
+    password: false
+  - name: MATRIX_ACCESS_TOKEN
+    description: "Matrix access token (or use MATRIX_PASSWORD)"
+    prompt: "Matrix access token"
+    password: true
+optional_env:
+  - name: MATRIX_PASSWORD
+    description: "Matrix account password"
+    prompt: "Matrix password"
+    password: true
