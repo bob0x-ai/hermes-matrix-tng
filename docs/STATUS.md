@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 1 — Plugin Skeleton and Upstream Tracking: complete.
+Phase 3 — Deterministic Test Suite: in progress.
 
 Phase 0 baseline/inventory is complete for non-destructive capture; checksum
 capture remains explicitly deferred until a safe backup window.
@@ -118,6 +118,25 @@ The exact Phase 2 implementation base still needs a deliberate selection. The
 Phase 1 bridge records the installed checkout revision only as its compatibility
 point; it does not claim that the final TNG adapter has been rebased.
 
+## Phase 2 Progress
+
+- Added `profile_isolation.py` with an immutable per-profile settings snapshot.
+- Replaced the pure delegation bridge with a `MatrixAdapter` subclass that
+  snapshots profile-owned store and crypto paths at construction.
+- Added profile-scoped settings for credentials, E2EE, policy, threading,
+  proxy, media, approvals, and batching.
+- Added lifecycle serialization around legacy bundled methods that still read
+  module-level store globals; paths are restored after each operation.
+- Added diagnostics path correction and profile-local public-room handling.
+- Replaced the bundled standalone sender hook with an explicit-config,
+  token-only sender so it cannot borrow process-global Matrix credentials.
+- Focused tests currently pass: `6 passed`.
+
+Phase 2 gate passed for the current inherited adapter surface: focused tests
+cover profile snapshots, distinct constructed adapters, serialized legacy-store
+lifecycle paths, diagnostics, and explicit standalone delivery. Remaining
+upstream compatibility changes will be assessed by Phase 3 tests.
+
 ## Next Actions
 
 1. Choose and record the exact upstream adapter base for the Phase 2
@@ -126,8 +145,9 @@ point; it does not claim that the final TNG adapter has been rebased.
    window.
 3. Classify upstream environment reads into scoped secrets versus behavior
    settings.
-4. Begin Phase 2 profile-isolation implementation without enabling or
-   installing the plugin.
+4. Complete the inherited-method environment audit and concurrency tests for
+   Phase 2. **Done.**
+5. Add the full deterministic test matrix and temporary SQLite/Mautrix tests.
 
 ## Deployment State
 
