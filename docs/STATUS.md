@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 4 — Disposable Matrix Integration Environment: in progress.
+Phase 4 — Disposable Matrix Integration Environment: pending external runtime.
 
 Phase 0 baseline/inventory is complete for non-destructive capture; checksum
 capture remains explicitly deferred until a safe backup window.
@@ -164,6 +164,14 @@ Passed. The suite now has `9 passed` tests covering:
 
 Generic gateway routing and duplicate-credential behavior remain covered by the
 upstream Hermes test suite and will be exercised again during Phase 4.
+
+## Phase 4 Progress
+
+- Located the existing disposable Continuwuity E2EE harness.
+- Confirmed the dedicated test port was free.
+- Attempted to start the harness without touching production.
+- Blocked because the user cannot access the Docker daemon socket. No
+  privilege escalation and no production Tuwunel substitution were attempted.
 
 ## Deployment State
 
