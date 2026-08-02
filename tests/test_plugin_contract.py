@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import asyncio
 from pathlib import Path
 import sys
 
@@ -112,3 +113,43 @@ def test_two_adapters_keep_distinct_paths_after_construction(monkeypatch, tmp_pa
     assert second.profile_settings.crypto_db_path.parent.name == "store"
     assert first._device_id == "FIRST"
     assert second._device_id == "SECOND"
+
+
+def test_lifecycle_serializes_legacy_store_global(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from plugins.platforms.matrix import adapter as bundled
+
+    tng = _load_tng_adapter()
+
+    def config(user, device):
+        return SimpleNamespace(
+            token=f"token-{user}",
+            api_key=None,
+            extra={
+                "homeserver": "https://example.invalid",
+                "user_id": f"@{user}:example.invalid",
+                "device_id": device,
+                "e2ee_mode": "off",
+            },
+        )
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "first"))
+    first = tng.MatrixAdapter(config("first", "FIRST"))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "second"))
+    second = tng.MatrixAdapter(config("second", "SECOND"))
+    observed = []
+
+    async def fake_connect(self, *, is_reconnect=False):
+        observed.append(bundled._CRYPTO_DB_PATH)
+        await asyncio.sleep(0)
+        return True
+
+    monkeypatch.setattr(bundled.MatrixAdapter, "connect", fake_connect)
+    original = bundled._CRYPTO_DB_PATH
+    async def run_both():
+        await asyncio.gather(first.connect(), second.connect())
+
+    asyncio.run(run_both())
+
+    assert observed == [first.profile_settings.crypto_db_path, second.profile_settings.crypto_db_path]
+    assert bundled._CRYPTO_DB_PATH == original
