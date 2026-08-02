@@ -8,14 +8,168 @@ with an instance-isolated adapter derived from the recorded upstream base.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from pathlib import Path
+import asyncio
+import os
+import threading
+
 from plugins.platforms.matrix import adapter as _bundled
+
+try:
+    from .profile_isolation import MatrixProfileSettings, resolve_matrix_profile_settings
+except ImportError as exc:
+    if "no known parent package" not in str(exc):
+        raise
+    from profile_isolation import MatrixProfileSettings, resolve_matrix_profile_settings
 
 UPSTREAM_BASE_COMMIT = "bc747001eec58150aba08e586ff1e7a25fc532aa"
 UPSTREAM_ORIGIN_MAIN_AT_BASELINE = "024f3e044bfd89ee226afc604fffafc1c2005f7ec"
-TNG_PHASE = 1
+TNG_PHASE = 2
 
-register = _bundled.register
-MatrixAdapter = _bundled.MatrixAdapter
+@contextmanager
+def _bundled_store_scope(settings: MatrixProfileSettings):
+    """Give legacy bundled methods explicit instance-owned store paths."""
+    old_store = _bundled._STORE_DIR
+    old_db = _bundled._CRYPTO_DB_PATH
+    _bundled._STORE_DIR = settings.store_dir
+    _bundled._CRYPTO_DB_PATH = settings.crypto_db_path
+    try:
+        yield
+    finally:
+        _bundled._STORE_DIR = old_store
+        _bundled._CRYPTO_DB_PATH = old_db
+
+
+@contextmanager
+def _profile_env_scope(settings: MatrixProfileSettings):
+    """Temporarily provide legacy raw-env reads with this profile's values."""
+    values = {
+        "MATRIX_RECOVERY_KEY": settings.recovery_key,
+        "MATRIX_ALLOW_PUBLIC_ROOMS": "true" if settings.allow_public_rooms else "false",
+    }
+    previous = {key: os.environ.get(key) for key in values}
+    try:
+        os.environ.update(values)
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+class MatrixAdapter(_bundled.MatrixAdapter):
+    """Phase 2 adapter shell with profile-owned persistent state.
+
+    The inherited Matrix behavior remains unchanged for now. Lifecycle entry
+    points receive explicit store paths; the remaining profile-dependent
+    behavior is applied from the immutable settings snapshot.
+    """
+
+    _store_lifecycle_lock: asyncio.Lock | None = None
+    _store_path_lock = threading.RLock()
+
+    def __init__(self, config):
+        self.profile_settings = resolve_matrix_profile_settings(config)
+        with type(self)._store_path_lock:
+            with _bundled_store_scope(self.profile_settings), _profile_env_scope(self.profile_settings):
+                super().__init__(config)
+        self._apply_profile_settings()
+
+    def _apply_profile_settings(self):
+        s = self.profile_settings
+        self._store_dir = s.store_dir
+        self._crypto_db_path = s.crypto_db_path
+        self._homeserver = s.homeserver
+        self._access_token = s.access_token
+        self._user_id = s.user_id
+        self._password = s.password
+        self._device_id = s.device_id
+        self._e2ee_mode = s.e2ee_mode
+        self._encryption = s.e2ee_mode != "off"
+        self._allowed_user_ids = set(s.allowed_users)
+        self._allowed_rooms = set(s.allowed_rooms)
+        self._allowed_room_ids = set(s.allowed_rooms)
+        self._free_rooms = set(s.free_response_rooms)
+        self._require_mention = s.require_mention
+        self._auto_thread = s.auto_thread
+        self._dm_auto_thread = s.dm_auto_thread
+        self._dm_mention_threads = s.dm_mention_threads
+        self._matrix_session_scope = s.session_scope
+        self._process_notices = s.process_notices
+        self._reactions_enabled = s.reactions
+        self._allow_room_mentions = s.allow_room_mentions
+        self._allow_public_rooms = s.allow_public_rooms
+        self._proxy_url = s.proxy or None
+        self._max_media_bytes = s.max_media_bytes
+        self.max_message_length = s.max_message_length
+        self.MAX_MESSAGE_LENGTH = s.max_message_length
+        self._split_threshold = max(100, s.max_message_length - 100)
+        self._room_identity_ttl_seconds = s.room_identity_ttl_seconds
+        self._text_batch_delay_seconds = s.text_batch_delay_seconds
+        self._text_batch_split_delay_seconds = s.text_batch_split_delay_seconds
+        self._approval_require_sender = s.approval_require_sender
+        self._approval_timeout_seconds = s.approval_timeout_seconds
+
+    async def connect(self, *, is_reconnect: bool = False) -> bool:
+        if type(self)._store_lifecycle_lock is None:
+            type(self)._store_lifecycle_lock = asyncio.Lock()
+        async with type(self)._store_lifecycle_lock:
+            with _bundled_store_scope(self.profile_settings), _profile_env_scope(self.profile_settings):
+                return await super().connect(is_reconnect=is_reconnect)
+
+    async def disconnect(self):
+        if type(self)._store_lifecycle_lock is None:
+            type(self)._store_lifecycle_lock = asyncio.Lock()
+        async with type(self)._store_lifecycle_lock:
+            with _bundled_store_scope(self.profile_settings), _profile_env_scope(self.profile_settings):
+                return await super().disconnect()
+
+    def get_diagnostics(self):
+        with type(self)._store_path_lock:
+            with _bundled_store_scope(self.profile_settings):
+                result = super().get_diagnostics()
+        if isinstance(result, dict):
+            crypto = result.get("e2ee")
+            if isinstance(crypto, dict):
+                crypto["crypto_store_path"] = str(self.profile_settings.crypto_db_path)
+            policy = result.get("policy")
+            if isinstance(policy, dict):
+                policy["allow_room_mentions"] = self.profile_settings.allow_room_mentions
+                policy["allow_public_rooms"] = self.profile_settings.allow_public_rooms
+        return result
+
+    async def create_room(self, *args, **kwargs):
+        """Keep public-room policy bound to this adapter's profile."""
+        if kwargs.get("preset", "private_chat") == "public_chat" and not self.profile_settings.allow_public_rooms:
+            return None
+        with _profile_env_scope(self.profile_settings):
+            return await super().create_room(*args, **kwargs)
+
+
+def _build_adapter(config):
+    return MatrixAdapter(config)
+
+
+class _RegistrationContext:
+    def __init__(self, context):
+        self._context = context
+
+    def __getattr__(self, name):
+        return getattr(self._context, name)
+
+    def register_platform(self, *args, **kwargs):
+        kwargs["adapter_factory"] = _build_adapter
+        return self._context.register_platform(*args, **kwargs)
+
+
+def register(ctx):
+    """Register the bundled manifest surface with the TNG adapter factory."""
+    return _bundled.register(_RegistrationContext(ctx))
+
+
 check_matrix_requirements = _bundled.check_matrix_requirements
 
 __all__ = [

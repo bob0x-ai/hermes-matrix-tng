@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 1 — Plugin Skeleton and Upstream Tracking: complete.
+Phase 2 — Profile Isolation Implementation: in progress.
 
 Phase 0 baseline/inventory is complete for non-destructive capture; checksum
 capture remains explicitly deferred until a safe backup window.
@@ -118,6 +118,22 @@ The exact Phase 2 implementation base still needs a deliberate selection. The
 Phase 1 bridge records the installed checkout revision only as its compatibility
 point; it does not claim that the final TNG adapter has been rebased.
 
+## Phase 2 Progress
+
+- Added `profile_isolation.py` with an immutable per-profile settings snapshot.
+- Replaced the pure delegation bridge with a `MatrixAdapter` subclass that
+  snapshots profile-owned store and crypto paths at construction.
+- Added profile-scoped settings for credentials, E2EE, policy, threading,
+  proxy, media, approvals, and batching.
+- Added lifecycle serialization around legacy bundled methods that still read
+  module-level store globals; paths are restored after each operation.
+- Added diagnostics path correction and profile-local public-room handling.
+- Focused tests currently pass: `6 passed`.
+
+This is not yet the Phase 2 gate: raw environment reads in inherited runtime
+methods and concurrent lifecycle behavior still need explicit coverage and
+further reduction before merging this phase.
+
 ## Next Actions
 
 1. Choose and record the exact upstream adapter base for the Phase 2
@@ -126,8 +142,8 @@ point; it does not claim that the final TNG adapter has been rebased.
    window.
 3. Classify upstream environment reads into scoped secrets versus behavior
    settings.
-4. Begin Phase 2 profile-isolation implementation without enabling or
-   installing the plugin.
+4. Complete the inherited-method environment audit and concurrency tests for
+   Phase 2.
 
 ## Deployment State
 
