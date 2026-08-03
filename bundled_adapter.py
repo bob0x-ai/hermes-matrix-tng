@@ -1329,6 +1329,7 @@ class MatrixAdapter(BasePlatformAdapter):
         server_ed25519 = self._extract_server_ed25519(our_keys)
 
         if server_ed25519 != local_ed25519:
+            self._device_key_mismatch = True
             _record_device_key_mismatch(
                 client=client,
                 local_ed25519=local_ed25519,

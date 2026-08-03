@@ -108,6 +108,7 @@ class MatrixAdapter(_bundled.MatrixAdapter):
 
     def __init__(self, config):
         self.profile_settings = resolve_matrix_profile_settings(config)
+        self._device_key_mismatch = False
         # Vendored runtime methods use instance-owned paths from their first
         # constructor call onward; establish them before invoking upstream.
         self._store_dir = self.profile_settings.store_dir
@@ -170,6 +171,15 @@ class MatrixAdapter(_bundled.MatrixAdapter):
         with type(self)._store_path_lock:
             result = super().get_diagnostics()
         if isinstance(result, dict):
+            result["recovery"] = {
+                "status": "device_key_mismatch" if self._device_key_mismatch else "normal",
+                "evidence_file": str(self._crypto_db_path.parent / "device-key-mismatches.jsonl"),
+                "action": (
+                    "restore a matching crypto-store backup or explicitly create a new device/store"
+                    if self._device_key_mismatch
+                    else "none"
+                ),
+            }
             crypto = result.get("e2ee")
             if isinstance(crypto, dict):
                 crypto["crypto_store_path"] = str(self.profile_settings.crypto_db_path)

@@ -85,6 +85,7 @@ def test_adapter_constructor_snapshots_profile_store_path(monkeypatch, tmp_path)
     assert diagnostics["e2ee"]["crypto_store_path"].endswith(
         "profile/platforms/matrix/store/crypto.db"
     )
+    assert diagnostics["recovery"]["status"] == "normal"
 
 
 def test_import_home_prefers_active_named_profile(tmp_path):
