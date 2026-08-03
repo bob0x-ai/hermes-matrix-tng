@@ -208,6 +208,12 @@ SQLite path problem under multiplexed long-lived sync tasks. All gateways were
 stopped afterward. TNG now vendors the recorded adapter revision and uses
 instance-owned `_store_dir` and `_crypto_db_path` references throughout its
 runtime methods; focused tests pass. A disposable multi-profile restart test
+was completed on 2026-08-03 with two fresh Continuwuity accounts and temporary
+profile homes. Both TNG adapters connected concurrently, shut down, and
+reconnected from the same per-profile SQLite stores (`[True, True]` on both
+passes); no `database is locked` errors occurred. The disposable homeserver
+and temporary data were removed afterward. This validates the path fix in
+isolation but does not authorize another production pilot.
 is required before another production attempt.
 
 ## Deployment State
