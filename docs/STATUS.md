@@ -201,6 +201,15 @@ Phase 4 passed for disposable two-profile connect/reconnect. The inherited
 Pending explicit user approval and a maintenance window. Phase 5 must not
 touch the production gateways or Matrix stores automatically.
 
+### Post-pilot isolation finding
+
+The first real gateway pilot loaded TNG but exposed the inherited module-global
+SQLite path problem under multiplexed long-lived sync tasks. All gateways were
+stopped afterward. TNG now vendors the recorded adapter revision and uses
+instance-owned `_store_dir` and `_crypto_db_path` references throughout its
+runtime methods; focused tests pass. A disposable multi-profile restart test
+is required before another production attempt.
+
 ## Deployment State
 
 TNG is not implemented, installed, enabled, or deployed. The current production

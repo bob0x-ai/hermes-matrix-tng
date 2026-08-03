@@ -51,7 +51,12 @@ def _import_bundled_adapter():
     )
     token = set_hermes_home_override(home)
     try:
-        from plugins.platforms.matrix import adapter as bundled
+        try:
+            from . import bundled_adapter as bundled
+        except ImportError as exc:
+            if "no known parent package" not in str(exc):
+                raise
+            import bundled_adapter as bundled
         return bundled
     finally:
         reset_hermes_home_override(token)
@@ -69,20 +74,6 @@ except ImportError as exc:
 UPSTREAM_BASE_COMMIT = "bc747001eec58150aba08e586ff1e7a25fc532aa"
 UPSTREAM_ORIGIN_MAIN_AT_BASELINE = "024f3e044bfd89ee226afc604fffafc1c2005f7ec"
 TNG_PHASE = 5
-
-@contextmanager
-def _bundled_store_scope(settings: MatrixProfileSettings):
-    """Give legacy bundled methods explicit instance-owned store paths."""
-    old_store = _bundled._STORE_DIR
-    old_db = _bundled._CRYPTO_DB_PATH
-    _bundled._STORE_DIR = settings.store_dir
-    _bundled._CRYPTO_DB_PATH = settings.crypto_db_path
-    try:
-        yield
-    finally:
-        _bundled._STORE_DIR = old_store
-        _bundled._CRYPTO_DB_PATH = old_db
-
 
 @contextmanager
 def _profile_env_scope(settings: MatrixProfileSettings):
@@ -117,8 +108,12 @@ class MatrixAdapter(_bundled.MatrixAdapter):
 
     def __init__(self, config):
         self.profile_settings = resolve_matrix_profile_settings(config)
+        # Vendored runtime methods use instance-owned paths from their first
+        # constructor call onward; establish them before invoking upstream.
+        self._store_dir = self.profile_settings.store_dir
+        self._crypto_db_path = self.profile_settings.crypto_db_path
         with type(self)._store_path_lock:
-            with _bundled_store_scope(self.profile_settings), _profile_env_scope(self.profile_settings):
+            with _profile_env_scope(self.profile_settings):
                 super().__init__(config)
         self._apply_profile_settings()
 
@@ -161,20 +156,19 @@ class MatrixAdapter(_bundled.MatrixAdapter):
         if type(self)._store_lifecycle_lock is None:
             type(self)._store_lifecycle_lock = asyncio.Lock()
         async with type(self)._store_lifecycle_lock:
-            with _bundled_store_scope(self.profile_settings), _profile_env_scope(self.profile_settings):
+            with _profile_env_scope(self.profile_settings):
                 return await super().connect(is_reconnect=is_reconnect)
 
     async def disconnect(self):
         if type(self)._store_lifecycle_lock is None:
             type(self)._store_lifecycle_lock = asyncio.Lock()
         async with type(self)._store_lifecycle_lock:
-            with _bundled_store_scope(self.profile_settings), _profile_env_scope(self.profile_settings):
+            with _profile_env_scope(self.profile_settings):
                 return await super().disconnect()
 
     def get_diagnostics(self):
         with type(self)._store_path_lock:
-            with _bundled_store_scope(self.profile_settings):
-                result = super().get_diagnostics()
+            result = super().get_diagnostics()
         if isinstance(result, dict):
             crypto = result.get("e2ee")
             if isinstance(crypto, dict):

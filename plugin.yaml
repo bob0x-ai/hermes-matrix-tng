@@ -3,9 +3,8 @@ label: Matrix
 kind: platform
 version: 0.1.0-tng
 description: >
-  Hermes Matrix TNG compatibility skeleton. This project currently delegates
-  to the recorded bundled Matrix adapter and is not deployed. Future phases
-  will add profile-isolated state and configuration handling.
+  Hermes Matrix TNG adapter with instance-owned profile paths for safe
+  multi-profile gateway operation. It is tested but not deployed by default.
 author: Local Hermes Operations
 requires_env:
   - name: MATRIX_HOMESERVER
