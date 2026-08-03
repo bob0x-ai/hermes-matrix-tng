@@ -8,6 +8,17 @@ Phase 5 Step 1 (preflight hardening) is complete on branch
 `phase-5-controlled-pilot`. No gateway process, production plugin, or Matrix
 store was changed.
 
+### Phase 5 Step 2 — Read-only preflight
+
+- Confirmed active user units: `hermes-gateway.service` (default), plus
+  `hermes-gateway-hikari.service`, `hermes-gateway-lens.service`,
+  `hermes-gateway-writer.service`, `hermes-gateway-yan-cgo.service`, and the
+  non-Matrix `hermes-gateway-scout.service`.
+- Confirmed each Matrix unit uses the installed Hermes checkout and its named
+  profile flag; no unit definitions or environment files were changed.
+- Pilot identities and maintenance-window timing remain to be selected before
+  the required complete store backup and controlled stop/start sequence.
+
 Phase 0 baseline/inventory is complete for non-destructive capture; checksum
 capture remains explicitly deferred until a safe backup window.
 
