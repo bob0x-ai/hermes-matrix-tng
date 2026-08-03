@@ -1015,6 +1015,19 @@ class _CryptoStateStore:
         return list(self._joined_rooms)
 
 
+def _initial_sync_non_room_payload(sync_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the safe, bounded part of a first Matrix sync response.
+
+    The first ``full_state`` sync establishes room membership and receives
+    queued to-device E2EE events, but its room timeline can be arbitrarily
+    large.  A gateway must not synchronously replay that history before it
+    starts the remaining multiplexed profiles.
+    """
+    payload = dict(sync_data)
+    payload["rooms"] = {}
+    return payload
+
+
 class MatrixAdapter(BasePlatformAdapter):
     """Gateway adapter for Matrix (any homeserver)."""
 
@@ -1322,6 +1335,51 @@ class MatrixAdapter(BasePlatformAdapter):
             return False
         return True
 
+    @staticmethod
+    def _is_unknown_token_error(exc: Exception) -> bool:
+        return getattr(exc, "errcode", "") == "M_UNKNOWN_TOKEN" or "Unknown access token" in str(exc)
+
+    async def _reauthenticate_after_device_delete(self, client: Any) -> bool:
+        """Obtain a replacement token bound to the same configured device ID."""
+        expected_device_id = str(getattr(self, "_device_id", "") or client.device_id or "")
+        password = str(getattr(self, "_password", "") or "")
+        if not expected_device_id or not password:
+            logger.error(
+                "Matrix: cannot reauthenticate repaired device %s without its configured Matrix password",
+                expected_device_id or "(unknown)",
+            )
+            return False
+        try:
+            # A successful device deletion invalidates its token on Tuwunel.
+            # Do not send that known-invalid bearer token to /login.
+            client.api.token = ""
+            await client.login(
+                identifier=self._user_id or client.mxid,
+                password=password,
+                device_id=expected_device_id,
+                device_name="Hermes Matrix Adapter",
+            )
+        except Exception as exc:
+            logger.error(
+                "Matrix: could not reauthenticate repaired device %s: %s",
+                expected_device_id,
+                exc,
+                exc_info=True,
+            )
+            return False
+        if str(client.device_id or "") != expected_device_id or not getattr(client.api, "token", ""):
+            logger.error(
+                "Matrix: reauthentication did not restore configured device %s",
+                expected_device_id,
+            )
+            return False
+        self._access_token = str(client.api.token)
+        logger.warning(
+            "Matrix: reauthenticated device %s with a replacement access token",
+            expected_device_id,
+        )
+        return True
+
     async def _emit_device_key_alert(
         self,
         *,
@@ -1560,6 +1618,31 @@ class MatrixAdapter(BasePlatformAdapter):
                 )
                 return False
 
+        if not await self._reauthenticate_after_device_delete(client):
+            self._device_key_recovery_status = "server_repair_reauth_failed"
+            _record_device_key_mismatch(
+                client=client,
+                local_ed25519=local_ed25519,
+                server_ed25519=server_ed25519,
+                store_path=store_path,
+                action="server_reauthentication_failed",
+            )
+            await self._emit_device_key_alert(
+                client=client,
+                status=self._device_key_recovery_status,
+                local_ed25519=local_ed25519,
+                server_ed25519=server_ed25519,
+                detail="server device deletion completed but same-device reauthentication failed",
+            )
+            return False
+        _record_device_key_mismatch(
+            client=client,
+            local_ed25519=local_ed25519,
+            server_ed25519=server_ed25519,
+            store_path=store_path,
+            action="server_reauthenticated",
+        )
+
         try:
             # share_keys() only uploads an account identity when this flag is
             # false. This is a deliberate, audited repair rather than an
@@ -1664,6 +1747,13 @@ class MatrixAdapter(BasePlatformAdapter):
             try:
                 await olm.share_keys()
             except Exception as exc:
+                if self._is_unknown_token_error(exc) and await self._reauthenticate_after_device_delete(client):
+                    try:
+                        await olm.share_keys()
+                    except Exception as retry_exc:
+                        logger.error("Matrix: failed to re-upload device keys after reauthentication: %s", retry_exc, exc_info=True)
+                        return False
+                    return await self._reverify_keys_after_upload(client, local_ed25519)
                 logger.error("Matrix: failed to re-upload device keys: %s", exc, exc_info=True)
                 return False
             return await self._reverify_keys_after_upload(client, local_ed25519)
@@ -1798,13 +1888,33 @@ class MatrixAdapter(BasePlatformAdapter):
                     f" (device {effective_device_id})" if effective_device_id else "",
                 )
             except Exception as exc:
-                logger.error(
-                    "Matrix: whoami failed — check MATRIX_ACCESS_TOKEN and MATRIX_HOMESERVER: %s",
-                    exc,
-                    exc_info=True,
-                )
-                await api.session.close()
-                return False
+                if self._is_unknown_token_error(exc) and self._password:
+                    logger.warning(
+                        "Matrix: access token for configured device %s is invalid; reauthenticating with the profile password",
+                        self._device_id or client.device_id or "(unknown)",
+                    )
+                    if await self._reauthenticate_after_device_delete(client):
+                        self._user_id = str(client.mxid or self._user_id)
+                        logger.info(
+                            "Matrix: restored access token for %s (device %s)",
+                            self._user_id or "(unknown user)",
+                            client.device_id or "(unknown)",
+                        )
+                    else:
+                        logger.error(
+                            "Matrix: token reauthentication failed for %s",
+                            self._device_id or client.device_id or "(unknown)",
+                        )
+                        await api.session.close()
+                        return False
+                else:
+                    logger.error(
+                        "Matrix: whoami failed — check MATRIX_ACCESS_TOKEN and MATRIX_HOMESERVER: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                    await api.session.close()
+                    return False
         elif self._password and self._user_id:
             try:
                 resp = await client.login(
@@ -2058,10 +2168,16 @@ class MatrixAdapter(BasePlatformAdapter):
                 # Build DM room cache from m.direct account data.
                 await self._refresh_dm_cache()
 
-                # Dispatch events from the initial sync so the OlmMachine
-                # receives to-device key shares queued while we were offline.
+                # Dispatch only non-room events from the initial sync so the
+                # OlmMachine receives queued to-device key shares. A full-state
+                # sync can contain an entire room history; dispatching every
+                # historical room event here delays connect() (and therefore
+                # every secondary profile in a multiplexed gateway) for an
+                # unbounded amount of time. The stored next_batch below means
+                # the background loop resumes from this exact point without
+                # replaying those old messages as fresh agent input.
                 try:
-                    await self._dispatch_sync(sync_data)
+                    await self._dispatch_sync(_initial_sync_non_room_payload(sync_data))
                 except Exception as exc:
                     logger.warning("Matrix: initial sync event dispatch error: %s", exc)
                 self._schedule_pending_invite_joins(sync_data)

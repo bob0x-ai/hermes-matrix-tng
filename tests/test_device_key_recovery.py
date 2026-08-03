@@ -31,6 +31,9 @@ def _recovery_adapter(tng, tmp_path, *, policy="repair"):
     adapter._device_key_mismatch = False
     adapter._device_key_recovery_status = "normal"
     adapter._device_key_mismatch_policy = policy
+    adapter._device_id = "TNGTEST"
+    adapter._user_id = "@tng-test:example.test"
+    adapter._password = "test-password"
     return adapter
 
 
@@ -51,6 +54,7 @@ def _fake_matrix(local_key, server_state):
 
         def __init__(self):
             self.api = API()
+            self.login_calls = []
 
         async def query_keys(self, _request):
             key = server_state["key"]
@@ -62,6 +66,13 @@ def _fake_matrix(local_key, server_state):
                 }
             }
             return SimpleNamespace(device_keys=device_keys)
+
+        async def login(self, *, identifier, password, device_id, device_name):
+            self.login_calls.append((identifier, password, device_id, device_name))
+            assert password == "test-password"
+            self.device_id = device_id
+            self.api.token = "replacement-token"
+            return SimpleNamespace(device_id=device_id, access_token=self.api.token)
 
     class Olm:
         def __init__(self):
@@ -100,6 +111,7 @@ def test_mismatch_repair_rebinds_server_to_local_identity_and_records_audit(tmp_
     assert [record["action"] for record in records] == [
         "detected",
         "server_repair_started",
+        "server_reauthenticated",
         "server_repair_verified",
     ]
     assert all(record["local_key_fingerprint"] for record in records)
@@ -162,6 +174,7 @@ def test_mismatch_repair_completes_password_uia_before_deleting_device(tmp_path)
         "detected",
         "server_repair_started",
         "server_delete_uia_completed",
+        "server_reauthenticated",
         "server_repair_verified",
     ]
 
@@ -173,6 +186,7 @@ def test_mismatch_repair_reports_uia_requirement_without_password(tmp_path):
     server_state = {"key": "other-public-key"}
     client, olm = _fake_matrix("local-public-key", server_state)
     adapter = _recovery_adapter(tng, tmp_path)
+    adapter._password = ""
 
     async def requires_uia(*_args, **_kwargs):
         raise MatrixUnknownRequestError(401, json.dumps({"session": "uia-session"}))

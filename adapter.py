@@ -65,11 +65,19 @@ def _import_bundled_adapter():
 _bundled = _import_bundled_adapter()
 
 try:
-    from .profile_isolation import MatrixProfileSettings, resolve_matrix_profile_settings
+    from .profile_isolation import (
+        MatrixProfileSettings,
+        persist_matrix_access_token,
+        resolve_matrix_profile_settings,
+    )
 except ImportError as exc:
     if "no known parent package" not in str(exc):
         raise
-    from profile_isolation import MatrixProfileSettings, resolve_matrix_profile_settings
+    from profile_isolation import (
+        MatrixProfileSettings,
+        persist_matrix_access_token,
+        resolve_matrix_profile_settings,
+    )
 
 UPSTREAM_BASE_COMMIT = "bc747001eec58150aba08e586ff1e7a25fc532aa"
 UPSTREAM_ORIGIN_MAIN_AT_BASELINE = "024f3e044bfd89ee226afc604fffafc1c2005f7ec"
@@ -177,6 +185,19 @@ class MatrixAdapter(_bundled.MatrixAdapter):
         async with type(self)._store_lifecycle_lock:
             with _profile_env_scope(self.profile_settings):
                 return await super().disconnect()
+
+    async def _reauthenticate_after_device_delete(self, client) -> bool:
+        """Retain the replacement token issued during same-device repair."""
+        if not await super()._reauthenticate_after_device_delete(client):
+            return False
+        if not persist_matrix_access_token(self.profile_settings.profile_home, self._access_token):
+            self._device_key_recovery_status = "server_repair_token_persist_failed"
+            _bundled.logger.error(
+                "Matrix: reauthenticated device %s but could not persist its replacement access token",
+                client.device_id,
+            )
+            return False
+        return True
 
     def get_diagnostics(self):
         with type(self)._store_path_lock:

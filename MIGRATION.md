@@ -13,7 +13,7 @@
   result. It records every step and non-reversible key fingerprints in
   `device-key-mismatches.jsonl` beside the store. Per-profile quarantine mode
   remains available when manual handling is preferred.
-- Local suite: 17 tests passing.
+- Local suite: 18 tests passing.
 - Disposable Tuwunel test: two concurrent encrypted DM profiles connected,
   exchanged messages in both directions, and reconnected from the same stores.
 - Optional operator notifications are documented in `ALERTING.md`. They use a
@@ -28,6 +28,28 @@
 4. Verify device/store fingerprints before enabling sync.
 5. Monitor SQLite locks, undecryptable events, device-key mismatches, and
    reconnect behavior before expanding the profile set.
+
+## Validated live deployment (old VPS, 2026-08-04)
+
+- One `hermes-gateway.service` process served `hikari`, `lens`, `writer`, and
+  `yan-cgo` concurrently through TNG. Each opened only its own SQLite store.
+- The active profile is `hikari`, so its own
+  `gateway.multiplex_profiles: true` setting is authoritative. Changing only
+  the root profile configuration does not enable this systemd process.
+- Plugin discovery is profile-local: link
+  `<profile>/plugins/matrix-platform` to this project for every Matrix
+  profile, and remove/disable duplicate legacy `platforms/matrix` links so
+  they cannot override TNG's `matrix` registration.
+- `lens`, `writer` (the active `@hikari-writer2` account), and `yan-cgo`
+  each had a server/local key mismatch. TNG completed password-UIA repair,
+  persisted the replacement token in that profile's `.env`, and verified the
+  repaired server key. A subsequent restart connected all four profiles with
+  no reauthentication or repair action.
+- `scout` and `tool` have no Matrix identity and are explicitly disabled for
+  Matrix (and tokenless Telegram) to avoid false adapter attempts.
+- Initial full-state sync now dispatches only non-room events before returning
+  from `connect()`. This retains queued E2EE to-device events while preventing
+  historical room backlog from serially blocking secondary-profile startup.
 
 ## Known production issue
 

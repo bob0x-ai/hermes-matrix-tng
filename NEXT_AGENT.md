@@ -19,5 +19,12 @@ Before deployment:
   `@matrix-adapter` notifier and unencrypted `#alerts` room only on the target
   homeserver; do not copy notifier credentials into this repository.
 
+For the single-process systemd deployment, check the *active profile's*
+`gateway.multiplex_profiles` value (not only the root config). Install the TNG
+`matrix-platform` link in each Matrix profile's `plugins/` directory and make
+sure no legacy nested `platforms/matrix` link remains discoverable. Profiles
+without a Matrix identity must explicitly set `platforms.matrix.enabled: false`
+so inherited/plugin discovery cannot create a useless adapter.
+
 The persistent disposable-account file is outside the repository. Do not copy
 it into Git or print its contents.

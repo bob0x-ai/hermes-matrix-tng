@@ -8,6 +8,8 @@ async work does not consult mutable process-global state.
 from __future__ import annotations
 
 import os
+import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -41,6 +43,53 @@ def _secret(name: str, default: str = "") -> str:
         # gateway is multiplexing. In that path os.environ is the default
         # profile's own source and is safe for compatibility with Hermes.
         return os.getenv(name, default) or ""
+
+
+def persist_matrix_access_token(profile_home: Path, access_token: str) -> bool:
+    """Atomically persist a reauthenticated profile-local Matrix token.
+
+    Device deletion invalidates the token bound to that Matrix device on some
+    homeservers. A successful same-device repair therefore needs to retain its
+    replacement token before reconnecting; otherwise the next boot would
+    recreate the failure. This never logs the token.
+    """
+    if not access_token:
+        return False
+    env_path = profile_home / ".env"
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = []
+    token_line = f"MATRIX_ACCESS_TOKEN={access_token}"
+    pattern = re.compile(r"^\s*(?:export\s+)?MATRIX_ACCESS_TOKEN\s*=.*$")
+    replaced = False
+    updated: list[str] = []
+    for line in lines:
+        if pattern.match(line):
+            updated.append(token_line)
+            replaced = True
+        else:
+            updated.append(line)
+    if not replaced:
+        updated.append(token_line)
+    content = "\n".join(updated) + "\n"
+    try:
+        env_path.parent.mkdir(parents=True, exist_ok=True)
+        mode = env_path.stat().st_mode & 0o777 if env_path.exists() else 0o600
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=env_path.parent, delete=False
+        ) as handle:
+            handle.write(content)
+            temporary_path = Path(handle.name)
+        os.chmod(temporary_path, mode)
+        os.replace(temporary_path, env_path)
+        return True
+    except OSError:
+        try:
+            temporary_path.unlink(missing_ok=True)
+        except (OSError, UnboundLocalError):
+            pass
+        return False
 
 
 @dataclass(frozen=True)

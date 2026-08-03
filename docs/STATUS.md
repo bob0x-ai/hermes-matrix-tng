@@ -2,7 +2,31 @@
 
 ## Current Phase
 
-Phase 5 — Controlled Production Pilot: pending explicit approval.
+Phase 5 — Controlled Production Pilot: live validation passed on 2026-08-04.
+
+### Live validation result (2026-08-04)
+
+- A single gateway process successfully connected four independent Matrix
+  profiles (`hikari`, `lens`, `writer`, and `yan-cgo`) using four independent
+  SQLite crypto stores.
+- The initial live pass automatically repaired three verified server/local
+  device-key mismatches (`lens`, active writer identity `@hikari-writer2`, and
+  `yan-cgo`) with password UIA, replacement-token persistence, local-key
+  upload, and post-repair verification. Hikari had been repaired immediately
+  before that pass using the same path.
+- The following clean startup used the persisted tokens and required no repair
+  or reauthentication for any Matrix profile.
+- `scout` and `tool` are now explicitly Matrix-disabled. The root/default
+  profile remains intentionally skipped as a secondary because it owns the
+  webhook listener.
+- TNG changed initial-sync dispatch to omit historical room events during
+  `connect()`, retaining only non-room/to-device E2EE processing. This removes
+  an unbounded startup blocker for multiplexed profiles. The full suite now
+  has 18 passing tests.
+- The gateway's normal shutdown wedged while an active Lens turn consumed
+  memory; systemd restarted it after a forced kill. This was outside Matrix
+  adapter teardown, but deployment should avoid restarting during active
+  turns until Hermes' shutdown path is separately hardened.
 
 Phase 5 Step 1 (preflight hardening) is complete on branch
 `phase-5-controlled-pilot`. No gateway process, production plugin, or Matrix
