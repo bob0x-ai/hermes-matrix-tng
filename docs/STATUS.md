@@ -214,6 +214,12 @@ reconnected from the same per-profile SQLite stores (`[True, True]` on both
 passes); no `database is locked` errors occurred. The disposable homeserver
 and temporary data were removed afterward. This validates the path fix in
 isolation but does not authorize another production pilot.
+
+An isolated pilot home was then prepared and validated offline. Its profile
+discovery contains only `default`, `writer`, and `yan-cgo` (the default entry
+is mandatory in Hermes multiplex mode); the default overlay has no Matrix
+credentials or platform configuration. TNG is the selected `matrix-platform`
+plugin. Tuwunel is not required for this discovery/configuration check.
 is required before another production attempt.
 
 ## Deployment State

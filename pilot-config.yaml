@@ -1,0 +1,10 @@
+# Disposable TNG pilot overlay. The default profile is intentionally empty;
+# named profiles are exposed through .pilot-home/profiles/.
+gateway:
+  multiplex_profiles: true
+  transport: auto
+agent:
+  max_turns: 1
+plugins:
+  enabled:
+    - matrix-platform
