@@ -81,6 +81,11 @@ def _profile_env_scope(settings: MatrixProfileSettings):
     values = {
         "MATRIX_RECOVERY_KEY": settings.recovery_key,
         "MATRIX_RECOVERY_KEY_OUTPUT_FILE": settings.recovery_key_output_file,
+        "MATRIX_DEVICE_KEY_MISMATCH_POLICY": settings.device_key_mismatch_policy,
+        "MATRIX_ADAPTER_ALERT_HOMESERVER": settings.adapter_alert_homeserver,
+        "MATRIX_ADAPTER_ALERT_TOKEN": settings.adapter_alert_token,
+        "MATRIX_ADAPTER_ALERT_ROOM": settings.adapter_alert_room_alias,
+        "MATRIX_ADAPTER_ALERT_USER_ID": settings.adapter_alert_user_id,
         "MATRIX_ALLOW_PUBLIC_ROOMS": "true" if settings.allow_public_rooms else "false",
     }
     previous = {key: os.environ.get(key) for key in values}
@@ -109,6 +114,7 @@ class MatrixAdapter(_bundled.MatrixAdapter):
     def __init__(self, config):
         self.profile_settings = resolve_matrix_profile_settings(config)
         self._device_key_mismatch = False
+        self._device_key_recovery_status = "normal"
         # Vendored runtime methods use instance-owned paths from their first
         # constructor call onward; establish them before invoking upstream.
         self._store_dir = self.profile_settings.store_dir
@@ -129,6 +135,11 @@ class MatrixAdapter(_bundled.MatrixAdapter):
         self._device_id = s.device_id
         self._e2ee_mode = s.e2ee_mode
         self._encryption = s.e2ee_mode != "off"
+        self._device_key_mismatch_policy = s.device_key_mismatch_policy
+        self._adapter_alert_homeserver = s.adapter_alert_homeserver or s.homeserver
+        self._adapter_alert_token = s.adapter_alert_token
+        self._adapter_alert_room_alias = s.adapter_alert_room_alias
+        self._adapter_alert_user_id = s.adapter_alert_user_id
         self._allowed_user_ids = set(s.allowed_users)
         self._allowed_rooms = set(s.allowed_rooms)
         self._allowed_room_ids = set(s.allowed_rooms)
@@ -172,10 +183,14 @@ class MatrixAdapter(_bundled.MatrixAdapter):
             result = super().get_diagnostics()
         if isinstance(result, dict):
             result["recovery"] = {
-                "status": "device_key_mismatch" if self._device_key_mismatch else "normal",
+                "status": self._device_key_recovery_status,
                 "evidence_file": str(self._crypto_db_path.parent / "device-key-mismatches.jsonl"),
                 "action": (
-                    "restore a matching crypto-store backup or explicitly create a new device/store"
+                    "the server device was repaired from this profile's local crypto store; review the audit record"
+                    if self._device_key_recovery_status == "server_device_repaired"
+                    else "configure this profile's Matrix password so the server's password confirmation can complete the repair"
+                    if self._device_key_recovery_status == "server_repair_needs_uia"
+                    else "restore a matching crypto-store backup or explicitly create a new device/store"
                     if self._device_key_mismatch
                     else "none"
                 ),

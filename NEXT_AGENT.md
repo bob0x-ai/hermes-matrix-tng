@@ -10,7 +10,14 @@ Before deployment:
 - keep the old gateway units stopped so two processes never use one Matrix
   device concurrently;
 - back up complete stores before any production start;
-- fail closed on device-key mismatch; never delete a store as an automatic fix.
+- TNG never deletes a local crypto store. By default it repairs a conflicting
+  server record for the same configured device ID, then re-queries it before
+  starting. Tuwunel requires password UIA for that delete: ensure every pilot
+  profile has its own `MATRIX_PASSWORD`, or expect the explicit
+  `server_repair_needs_uia` status.
+- Read `RECOVERY.md` and `ALERTING.md`. Provision the optional dedicated
+  `@matrix-adapter` notifier and unencrypted `#alerts` room only on the target
+  homeserver; do not copy notifier credentials into this repository.
 
 The persistent disposable-account file is outside the repository. Do not copy
 it into Git or print its contents.

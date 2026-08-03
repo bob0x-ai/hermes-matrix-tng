@@ -8,6 +8,24 @@ Phase 5 Step 1 (preflight hardening) is complete on branch
 `phase-5-controlled-pilot`. No gateway process, production plugin, or Matrix
 store was changed.
 
+### Phase 5 recovery and operator-notification hardening
+
+- TNG now treats the intact local crypto store as authoritative for its
+  explicitly configured device ID. On a server/local identity-key mismatch it
+  records redacted fingerprints, removes the conflicting server record,
+  re-uploads local keys, and verifies the result before sync starts.
+- The destructive server step is explicit and audited, never silent. Tuwunel
+  requires password UIA for it; token-only profiles report
+  `server_repair_needs_uia` without mutating either local store.
+- A real local Tuwunel probe confirmed that UIA requirement against the
+  reusable test account. The probe used a temporary store and did not touch a
+  production account or store.
+- Optional dedicated `@matrix-adapter` alerts are implemented and covered by
+  mocked Matrix API tests. The notifier only sends a redacted plain message to
+  a resolvable, confirmed-unencrypted `#alerts` room; all other outcomes fall
+  back to Hermes logs. It has not been provisioned on this old host.
+- Focused suite: 17 passed.
+
 ### Phase 5 Step 2 — Read-only preflight
 
 - Confirmed active user units: `hermes-gateway.service` (default), plus

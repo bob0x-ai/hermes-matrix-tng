@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import asyncio
 import array
+import hashlib
 import inspect
 import json
 import logging
@@ -63,7 +64,7 @@ import shutil
 import subprocess
 import sys
 import time
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 from dataclasses import dataclass, field
 
 from html import escape as _html_escape
@@ -733,8 +734,23 @@ def _redact_matrix_value(value: Any) -> str:
     return "***"
 
 
-def _record_device_key_mismatch(*, client: Any, local_ed25519: str, server_ed25519: str | None, store_path: Path) -> None:
-    """Persist non-secret mismatch evidence without mutating Matrix state."""
+def _device_key_fingerprint(value: str | None) -> str:
+    """Return a short, non-reversible correlation fingerprint for a public key."""
+    if not value:
+        return ""
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+def _record_device_key_mismatch(
+    *,
+    client: Any,
+    local_ed25519: str,
+    server_ed25519: str | None,
+    store_path: Path,
+    action: str = "detected",
+    detail: str = "",
+) -> None:
+    """Persist non-secret device-key recovery evidence beside the local store."""
     try:
         store_path.parent.mkdir(parents=True, exist_ok=True)
         record = {
@@ -744,6 +760,10 @@ def _record_device_key_mismatch(*, client: Any, local_ed25519: str, server_ed255
             "device_id": str(getattr(client, "device_id", "")),
             "local_key_present": bool(local_ed25519),
             "server_key_present": bool(server_ed25519),
+            "local_key_fingerprint": _device_key_fingerprint(local_ed25519),
+            "server_key_fingerprint": _device_key_fingerprint(server_ed25519),
+            "action": action,
+            "detail": detail,
             "store_path": str(store_path),
             "store_exists": store_path.exists(),
             "store_size": store_path.stat().st_size if store_path.exists() else 0,
@@ -752,6 +772,15 @@ def _record_device_key_mismatch(*, client: Any, local_ed25519: str, server_ed255
             fh.write(json.dumps(record, sort_keys=True) + "\n")
     except Exception:
         logger.exception("Matrix: failed to record device-key mismatch evidence")
+
+
+def _default_adapter_alert_alias(alert_user_id: str, affected_user_id: str) -> str:
+    """Derive the conventional ``#alerts`` alias for the Matrix server."""
+    candidate = (alert_user_id or affected_user_id or "").strip()
+    if ":" not in candidate:
+        return ""
+    domain = candidate.rsplit(":", 1)[1].strip()
+    return f"#alerts:{domain}" if domain else ""
 
 
 def _write_matrix_recovery_key_output_file(recovery_key: str) -> Optional[Path]:
@@ -1274,19 +1303,332 @@ class MatrixAdapter(BasePlatformAdapter):
             dk = getattr(resp, "device_keys", {}) or {}
             ud = dk.get(str(client.mxid)) or {}
             dev = ud.get(str(client.device_id))
-            if dev:
-                server_ed = self._extract_server_ed25519(dev)
-                if server_ed != local_ed25519:
-                    logger.error(
-                        "Matrix: device %s has immutable identity keys that "
-                        "don't match this installation. Generate a new access "
-                        "token with a fresh device.",
-                        client.device_id,
-                    )
-                    return False
+            if not dev:
+                logger.error(
+                    "Matrix: device %s was not present after key upload",
+                    client.device_id,
+                )
+                return False
+            server_ed = self._extract_server_ed25519(dev)
+            if server_ed != local_ed25519:
+                logger.error(
+                    "Matrix: device %s has identity keys that do not match "
+                    "this profile's local crypto store after upload",
+                    client.device_id,
+                )
+                return False
         except Exception as exc:
             logger.error("Matrix: post-upload key verification failed: %s", exc, exc_info=True)
             return False
+        return True
+
+    async def _emit_device_key_alert(
+        self,
+        *,
+        client: Any,
+        status: str,
+        local_ed25519: str,
+        server_ed25519: str | None,
+        detail: str = "",
+    ) -> None:
+        """Send a best-effort unencrypted operator alert from ``@matrix-adapter``.
+
+        The notifier is deliberately independent of the affected Matrix
+        adapter and uses a dedicated, token-only identity. It will never join
+        rooms, create rooms, or send into an encrypted room. Any unavailable
+        prerequisite is logged and leaves the profile's recovery result alone.
+        """
+        token = str(getattr(self, "_adapter_alert_token", "") or "")
+        homeserver = str(getattr(self, "_adapter_alert_homeserver", "") or "").rstrip("/")
+        configured_alias = str(getattr(self, "_adapter_alert_room_alias", "") or "").strip()
+        alert_user_id = str(getattr(self, "_adapter_alert_user_id", "") or "")
+        alias = configured_alias or _default_adapter_alert_alias(alert_user_id, str(client.mxid))
+        if not token or not homeserver or not alias:
+            logger.warning(
+                "Matrix: device-key incident %s for %s; adapter alert is not configured, using Hermes logs only",
+                status,
+                getattr(client, "device_id", ""),
+            )
+            return
+
+        try:
+            import aiohttp
+
+            timeout = aiohttp.ClientTimeout(total=8)
+            headers = {"Authorization": f"Bearer {token}"}
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+                alias_url = f"{homeserver}/_matrix/client/v3/directory/room/{quote(alias, safe='')}"
+                async with session.get(alias_url) as response:
+                    if response.status != 200:
+                        logger.warning(
+                            "Matrix: device-key incident %s for %s; alerts alias %s is unavailable (%s), using Hermes logs only",
+                            status,
+                            getattr(client, "device_id", ""),
+                            alias,
+                            response.status,
+                        )
+                        return
+                    room_id = str((await response.json()).get("room_id") or "")
+                if not room_id:
+                    logger.warning("Matrix: alerts alias %s resolved without a room ID; using Hermes logs only", alias)
+                    return
+
+                state_url = (
+                    f"{homeserver}/_matrix/client/v3/rooms/{quote(room_id, safe='')}/state/m.room.encryption"
+                )
+                async with session.get(state_url) as response:
+                    if response.status == 200:
+                        logger.warning(
+                            "Matrix: alerts room %s is encrypted; refusing to send an adapter incident there",
+                            room_id,
+                        )
+                        return
+                    if response.status != 404:
+                        logger.warning(
+                            "Matrix: could not confirm alerts room %s is unencrypted (%s); using Hermes logs only",
+                            room_id,
+                            response.status,
+                        )
+                        return
+
+                evidence_path = self._crypto_db_path.parent / "device-key-mismatches.jsonl"
+                message = "\n".join(
+                    (
+                        "⚠️ Matrix adapter device-key incident",
+                        f"Status: {status}",
+                        f"Account: {getattr(client, 'mxid', '')}",
+                        f"Device: {getattr(client, 'device_id', '')}",
+                        f"Local key fingerprint: {_device_key_fingerprint(local_ed25519)}",
+                        f"Server key fingerprint: {_device_key_fingerprint(server_ed25519)}",
+                        f"Detail: {detail or 'none'}",
+                        f"Evidence: {evidence_path}",
+                    )
+                )
+                transaction_id = f"hermes-matrix-alert-{int(time.time() * 1000)}"
+                send_url = (
+                    f"{homeserver}/_matrix/client/v3/rooms/{quote(room_id, safe='')}/send/"
+                    f"m.room.message/{transaction_id}"
+                )
+                async with session.put(
+                    send_url,
+                    json={"msgtype": "m.text", "body": message},
+                ) as response:
+                    if response.status not in (200, 201):
+                        logger.warning(
+                            "Matrix: could not send device-key alert to %s (%s); using Hermes logs only",
+                            room_id,
+                            response.status,
+                        )
+                        return
+            logger.warning(
+                "Matrix: sent device-key incident %s for %s to %s",
+                status,
+                getattr(client, "device_id", ""),
+                alias,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Matrix: failed to send device-key incident %s for %s to alerts: %s",
+                status,
+                getattr(client, "device_id", ""),
+                type(exc).__name__,
+            )
+
+    async def _repair_server_device_keys(
+        self, client: Any, olm: Any, local_ed25519: str, server_ed25519: str | None
+    ) -> bool:
+        """Rebind this configured server device to its intact local identity.
+
+        A Matrix device ID and the private key in its crypto store are a pair.
+        If the homeserver carries another public key for that same device ID,
+        deleting only that server record and re-uploading the local identity
+        is the least disruptive deterministic repair. Every step is recorded
+        and the result is verified; failures remain fail-closed.
+        """
+        store_path = self._crypto_db_path
+        _record_device_key_mismatch(
+            client=client,
+            local_ed25519=local_ed25519,
+            server_ed25519=server_ed25519,
+            store_path=store_path,
+            action="server_repair_started",
+        )
+        logger.warning(
+            "Matrix: device %s has a server/local identity-key mismatch; "
+            "repairing the server record from this profile's local crypto store",
+            client.device_id,
+        )
+        try:
+            await client.api.request(
+                client.api.Method.DELETE if hasattr(client.api, "Method") else "DELETE",
+                f"/_matrix/client/v3/devices/{client.device_id}",
+            )
+        except Exception as exc:
+            # Homeservers commonly require user-interactive authentication
+            # (UIA) to remove a device. An access token alone is therefore
+            # insufficient even though it was enough to identify the device.
+            # Complete the challenge only with this profile's configured
+            # password; never borrow a password from another profile.
+            session = ""
+            if getattr(exc, "http_status", None) == 401:
+                try:
+                    session = str(json.loads(getattr(exc, "text", "{}") or "{}").get("session") or "")
+                except (TypeError, ValueError):
+                    pass
+            if session and getattr(self, "_password", ""):
+                try:
+                    await client.api.request(
+                        client.api.Method.DELETE if hasattr(client.api, "Method") else "DELETE",
+                        f"/_matrix/client/v3/devices/{client.device_id}",
+                        {
+                            "auth": {
+                                "type": "m.login.password",
+                                "session": session,
+                                "identifier": {"type": "m.id.user", "user": str(client.mxid)},
+                                "password": self._password,
+                            }
+                        },
+                        sensitive=True,
+                    )
+                    _record_device_key_mismatch(
+                        client=client,
+                        local_ed25519=local_ed25519,
+                        server_ed25519=server_ed25519,
+                        store_path=store_path,
+                        action="server_delete_uia_completed",
+                    )
+                except Exception as uia_exc:
+                    self._device_key_recovery_status = "server_repair_failed"
+                    _record_device_key_mismatch(
+                        client=client,
+                        local_ed25519=local_ed25519,
+                        server_ed25519=server_ed25519,
+                        store_path=store_path,
+                        action="server_delete_uia_failed",
+                        detail=type(uia_exc).__name__,
+                    )
+                    logger.error(
+                        "Matrix: password UIA could not remove mismatched server device %s: %s",
+                        client.device_id,
+                        uia_exc,
+                        exc_info=True,
+                    )
+                    await self._emit_device_key_alert(
+                        client=client,
+                        status=self._device_key_recovery_status,
+                        local_ed25519=local_ed25519,
+                        server_ed25519=server_ed25519,
+                        detail="password UIA failed while deleting the server device record",
+                    )
+                    return False
+            else:
+                self._device_key_recovery_status = (
+                    "server_repair_needs_uia" if session else "server_repair_failed"
+                )
+                action = "server_delete_needs_uia" if session else "server_delete_failed"
+                detail = "password_not_configured" if session else type(exc).__name__
+                _record_device_key_mismatch(
+                    client=client,
+                    local_ed25519=local_ed25519,
+                    server_ed25519=server_ed25519,
+                    store_path=store_path,
+                    action=action,
+                    detail=detail,
+                )
+                if session:
+                    logger.error(
+                        "Matrix: repairing device %s requires password UIA, but this profile has no Matrix password configured",
+                        client.device_id,
+                    )
+                else:
+                    logger.error(
+                        "Matrix: could not remove mismatched server device %s: %s",
+                        client.device_id,
+                        exc,
+                        exc_info=True,
+                    )
+                await self._emit_device_key_alert(
+                    client=client,
+                    status=self._device_key_recovery_status,
+                    local_ed25519=local_ed25519,
+                    server_ed25519=server_ed25519,
+                    detail=(
+                        "server requested password UIA but no profile password is configured"
+                        if session
+                        else "server device deletion failed"
+                    ),
+                )
+                return False
+
+        try:
+            # share_keys() only uploads an account identity when this flag is
+            # false. This is a deliberate, audited repair rather than an
+            # accidental rebootstrap caused by an empty store.
+            olm.account.shared = False
+            await olm.share_keys()
+        except Exception as exc:
+            self._device_key_recovery_status = "server_repair_failed"
+            _record_device_key_mismatch(
+                client=client,
+                local_ed25519=local_ed25519,
+                server_ed25519=server_ed25519,
+                store_path=store_path,
+                action="server_reupload_failed",
+                detail=type(exc).__name__,
+            )
+            logger.error(
+                "Matrix: could not re-upload local keys for repaired device %s: %s",
+                client.device_id,
+                exc,
+                exc_info=True,
+            )
+            await self._emit_device_key_alert(
+                client=client,
+                status=self._device_key_recovery_status,
+                local_ed25519=local_ed25519,
+                server_ed25519=server_ed25519,
+                detail="local key upload after server deletion failed",
+            )
+            return False
+
+        if not await self._reverify_keys_after_upload(client, local_ed25519):
+            self._device_key_recovery_status = "server_repair_failed"
+            _record_device_key_mismatch(
+                client=client,
+                local_ed25519=local_ed25519,
+                server_ed25519=server_ed25519,
+                store_path=store_path,
+                action="server_repair_verification_failed",
+            )
+            await self._emit_device_key_alert(
+                client=client,
+                status=self._device_key_recovery_status,
+                local_ed25519=local_ed25519,
+                server_ed25519=server_ed25519,
+                detail="server did not verify the repaired local identity key",
+            )
+            return False
+
+        self._device_key_mismatch = False
+        self._device_key_recovery_status = "server_device_repaired"
+        _record_device_key_mismatch(
+            client=client,
+            local_ed25519=local_ed25519,
+            server_ed25519=local_ed25519,
+            store_path=store_path,
+            action="server_repair_verified",
+        )
+        logger.warning(
+            "Matrix: repaired device %s and verified its local identity key on the server",
+            client.device_id,
+        )
+        await self._emit_device_key_alert(
+            client=client,
+            status=self._device_key_recovery_status,
+            local_ed25519=local_ed25519,
+            server_ed25519=local_ed25519,
+            detail="server device record was repaired and verified from the local crypto store",
+        )
         return True
 
     async def _verify_device_keys_on_server(self, client: Any, olm: Any) -> bool:
@@ -1330,27 +1672,30 @@ class MatrixAdapter(BasePlatformAdapter):
 
         if server_ed25519 != local_ed25519:
             self._device_key_mismatch = True
+            self._device_key_recovery_status = "device_key_mismatch"
             _record_device_key_mismatch(
                 client=client,
                 local_ed25519=local_ed25519,
                 server_ed25519=server_ed25519,
                 store_path=self._crypto_db_path,
             )
-            if olm.account.shared:
+            if getattr(self, "_device_key_mismatch_policy", "repair") == "quarantine":
                 logger.error(
-                    "Matrix: server has different identity keys for device %s — "
-                    "local crypto state is stale. Delete %s and restart.",
+                    "Matrix: device %s has mismatched server identity keys; "
+                    "quarantine policy leaves the server record unchanged",
                     client.device_id,
-                    self._crypto_db_path,
+                )
+                await self._emit_device_key_alert(
+                    client=client,
+                    status=self._device_key_recovery_status,
+                    local_ed25519=local_ed25519,
+                    server_ed25519=server_ed25519,
+                    detail="profile quarantine policy left the server record unchanged",
                 )
                 return False
-
-            logger.error(
-                "Matrix: refusing automatic device replacement for %s; "
-                "mismatch evidence was recorded and operator recovery is required",
-                client.device_id,
+            return await self._repair_server_device_keys(
+                client, olm, local_ed25519, server_ed25519
             )
-            return False
 
         return True
 

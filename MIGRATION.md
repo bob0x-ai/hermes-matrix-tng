@@ -7,12 +7,18 @@
   `bc747001eec58150aba08e586ff1e7a25fc532aa`.
 - Runtime crypto-store paths are instance-owned; the inherited module-global
   path collision has been removed.
-- Automatic server-device deletion on key mismatch is disabled. TNG records a
-  non-secret `device-key-mismatches.jsonl` evidence file beside the store and
-  requires explicit operator recovery.
-- Local suite: 10 tests passing.
+- A server/local device-key mismatch is repaired automatically from the
+  profile's intact local crypto store: TNG deletes the conflicting server
+  record for the same device ID, re-uploads local keys, and verifies the
+  result. It records every step and non-reversible key fingerprints in
+  `device-key-mismatches.jsonl` beside the store. Per-profile quarantine mode
+  remains available when manual handling is preferred.
+- Local suite: 17 tests passing.
 - Disposable Tuwunel test: two concurrent encrypted DM profiles connected,
   exchanged messages in both directions, and reconnected from the same stores.
+- Optional operator notifications are documented in `ALERTING.md`. They use a
+  dedicated token-only `@matrix-adapter` identity and an unencrypted `#alerts`
+  room; no production notifier account has been created by this project.
 
 ## Deployment rules
 
@@ -25,9 +31,10 @@
 
 ## Known production issue
 
-The existing `writer` and `yan-cgo` stores do not match the server-side device
-keys. Do not delete or rotate those stores automatically. Treat recovery as a
-separate explicit device/store migration.
+The existing `writer` and `yan-cgo` stores previously did not match the
+server-side device keys. With a verified backup, they are suitable candidates
+for a controlled test of automatic server-record repair; TNG does not delete
+or rotate their local stores.
 
 ## Test accounts
 

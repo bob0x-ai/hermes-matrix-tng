@@ -48,6 +48,15 @@ correct, but that warning is retained as a Phase 5 hardening item.
 Phase 4 passes for the disposable two-profile connect/reconnect gate. It does
 not authorize a production pilot.
 
+## Device-key recovery probe
+
+`scripts/live_device_key_recovery_test.py --run` uses the reusable local
+Tuwunel test account with a fresh temporary store. On 2026-08-03 it confirmed
+that the server requires password UIA for device deletion; the token-only
+account was left untouched and TNG surfaced `server_repair_needs_uia` with a
+non-secret audit record. The script runs the full repair and restart check when
+that reusable account is supplied as `TEST1_PASSWORD`.
+
 ## Previously Blocked Gate
 
 Before the user granted Docker access, the gate required either:
