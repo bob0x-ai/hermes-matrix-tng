@@ -774,15 +774,6 @@ def _record_device_key_mismatch(
         logger.exception("Matrix: failed to record device-key mismatch evidence")
 
 
-def _default_adapter_alert_alias(alert_user_id: str, affected_user_id: str) -> str:
-    """Derive the conventional ``#alerts`` alias for the Matrix server."""
-    candidate = (alert_user_id or affected_user_id or "").strip()
-    if ":" not in candidate:
-        return ""
-    domain = candidate.rsplit(":", 1)[1].strip()
-    return f"#alerts:{domain}" if domain else ""
-
-
 def _write_matrix_recovery_key_output_file(recovery_key: str) -> Optional[Path]:
     """Write a generated Matrix recovery key to an operator-chosen file.
 
@@ -1396,14 +1387,16 @@ class MatrixAdapter(BasePlatformAdapter):
         rooms, create rooms, or send into an encrypted room. Any unavailable
         prerequisite is logged and leaves the profile's recovery result alone.
         """
+        if not getattr(self, "_adapter_alerts_enabled", False):
+            return
+
         token = str(getattr(self, "_adapter_alert_token", "") or "")
         homeserver = str(getattr(self, "_adapter_alert_homeserver", "") or "").rstrip("/")
         configured_alias = str(getattr(self, "_adapter_alert_room_alias", "") or "").strip()
         alert_user_id = str(getattr(self, "_adapter_alert_user_id", "") or "")
-        alias = configured_alias or _default_adapter_alert_alias(alert_user_id, str(client.mxid))
-        if not token or not homeserver or not alias:
+        if not token or not homeserver or not configured_alias or not alert_user_id:
             logger.warning(
-                "Matrix: device-key incident %s for %s; adapter alert is not configured, using Hermes logs only",
+                "Matrix: device-key incident %s for %s; alerts are enabled but notifier configuration is incomplete, using Hermes logs only",
                 status,
                 getattr(client, "device_id", ""),
             )
@@ -1415,20 +1408,20 @@ class MatrixAdapter(BasePlatformAdapter):
             timeout = aiohttp.ClientTimeout(total=8)
             headers = {"Authorization": f"Bearer {token}"}
             async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-                alias_url = f"{homeserver}/_matrix/client/v3/directory/room/{quote(alias, safe='')}"
+                alias_url = f"{homeserver}/_matrix/client/v3/directory/room/{quote(configured_alias, safe='')}"
                 async with session.get(alias_url) as response:
                     if response.status != 200:
                         logger.warning(
                             "Matrix: device-key incident %s for %s; alerts alias %s is unavailable (%s), using Hermes logs only",
                             status,
                             getattr(client, "device_id", ""),
-                            alias,
+                            configured_alias,
                             response.status,
                         )
                         return
                     room_id = str((await response.json()).get("room_id") or "")
                 if not room_id:
-                    logger.warning("Matrix: alerts alias %s resolved without a room ID; using Hermes logs only", alias)
+                    logger.warning("Matrix: alerts alias %s resolved without a room ID; using Hermes logs only", configured_alias)
                     return
 
                 state_url = (
@@ -1482,7 +1475,7 @@ class MatrixAdapter(BasePlatformAdapter):
                 "Matrix: sent device-key incident %s for %s to %s",
                 status,
                 getattr(client, "device_id", ""),
-                alias,
+                configured_alias,
             )
         except Exception as exc:
             logger.warning(

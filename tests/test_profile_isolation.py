@@ -62,11 +62,21 @@ def test_scoped_secret_is_authoritative_for_each_profile(monkeypatch, tmp_path):
     assert first_settings.crypto_db_path != second_settings.crypto_db_path
 
 
-def test_adapter_alert_identity_is_snapshotted_from_explicit_global_config(monkeypatch, tmp_path):
+def test_adapter_alerts_are_snapshotted_from_process_default_config(monkeypatch, tmp_path):
     secret_scope.set_multiplex_active(True)
-    monkeypatch.setenv("HERMES_MATRIX_ADAPTER_ALERT_HOMESERVER", "https://alerts.example")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setenv("HERMES_MATRIX_ADAPTER_ALERT_TOKEN", "alert-token")
-    monkeypatch.setenv("HERMES_MATRIX_ADAPTER_ALERT_USER_ID", "@matrix-adapter:alerts.example")
+    (tmp_path / "config.yaml").write_text(
+        """
+platforms:
+  matrix:
+    alerts: true
+    alerts_homeserver: https://alerts.example
+    alerts_user_id: "@matrix-adapter:alerts.example"
+    alerts_room: "#operator-alerts:alerts.example"
+""".lstrip(),
+        encoding="utf-8",
+    )
     scope = secret_scope.set_secret_scope({})
     try:
         settings = resolve_matrix_profile_settings(SimpleNamespace(extra={}), tmp_path / "writer")
@@ -74,6 +84,26 @@ def test_adapter_alert_identity_is_snapshotted_from_explicit_global_config(monke
         secret_scope.reset_secret_scope(scope)
         secret_scope.set_multiplex_active(False)
 
+    assert settings.adapter_alerts_enabled is True
     assert settings.adapter_alert_homeserver == "https://alerts.example"
     assert settings.adapter_alert_token == "alert-token"
     assert settings.adapter_alert_user_id == "@matrix-adapter:alerts.example"
+    assert settings.adapter_alert_room_alias == "#operator-alerts:alerts.example"
+
+
+def test_adapter_alerts_remain_disabled_without_default_config_flag(monkeypatch, tmp_path):
+    secret_scope.set_multiplex_active(True)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_MATRIX_ADAPTER_ALERT_TOKEN", "alert-token")
+    (tmp_path / "config.yaml").write_text(
+        "platforms:\n  matrix:\n    alerts: false\n",
+        encoding="utf-8",
+    )
+    scope = secret_scope.set_secret_scope({})
+    try:
+        settings = resolve_matrix_profile_settings(SimpleNamespace(extra={}), tmp_path / "writer")
+    finally:
+        secret_scope.reset_secret_scope(scope)
+        secret_scope.set_multiplex_active(False)
+
+    assert settings.adapter_alerts_enabled is False

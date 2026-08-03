@@ -22,7 +22,7 @@ Phase 5 — Controlled Production Pilot: live validation passed on 2026-08-04.
 - TNG changed initial-sync dispatch to omit historical room events during
   `connect()`, retaining only non-room/to-device E2EE processing. This removes
   an unbounded startup blocker for multiplexed profiles. The full suite now
-  has 20 passing tests.
+  has 23 passing tests.
 - The final production-readiness review fixes are applied: ignored-user and
   thread mention policy are immutable per-profile settings, and inherited
   diagnostics run inside the owning profile's environment scope. Two
@@ -52,9 +52,10 @@ store was changed.
   reusable test account. The probe used a temporary store and did not touch a
   production account or store.
 - Optional dedicated `@matrix-adapter` alerts are implemented and covered by
-  mocked Matrix API tests. The notifier only sends a redacted plain message to
-  a resolvable, confirmed-unencrypted `#alerts` room; all other outcomes fall
-  back to Hermes logs. It has not been provisioned on this old host.
+  mocked Matrix API tests. They are opt-in through the shared/default
+  `config.yaml`, require an explicit unencrypted room and a separately
+  provisioned notifier token, and otherwise fall back to Hermes logs. They
+  have not been provisioned on this old host.
 - Focused suite: 17 passed.
 
 ### Phase 5 Step 2 — Read-only preflight

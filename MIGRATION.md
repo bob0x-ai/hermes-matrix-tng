@@ -17,8 +17,9 @@
 - Disposable Tuwunel test: two concurrent encrypted DM profiles connected,
   exchanged messages in both directions, and reconnected from the same stores.
 - Optional operator notifications are documented in `ALERTING.md`. They use a
-  dedicated token-only `@matrix-adapter` identity and an unencrypted `#alerts`
-  room; no production notifier account has been created by this project.
+  dedicated token-only `@matrix-adapter` identity and an explicitly configured
+  unencrypted room; no production notifier account has been created by this
+  project.
 
 ## Deployment rules
 

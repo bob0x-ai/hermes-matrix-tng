@@ -61,9 +61,10 @@ class _Session:
 def _adapter(tng, tmp_path):
     adapter = object.__new__(tng._bundled.MatrixAdapter)
     adapter._crypto_db_path = tmp_path / "profile" / "store" / "crypto.db"
+    adapter._adapter_alerts_enabled = True
     adapter._adapter_alert_homeserver = "https://matrix.example.test"
     adapter._adapter_alert_token = "adapter-alert-token"
-    adapter._adapter_alert_room_alias = ""
+    adapter._adapter_alert_room_alias = "#operator-alerts:example.test"
     adapter._adapter_alert_user_id = "@matrix-adapter:example.test"
     return adapter
 
@@ -91,7 +92,7 @@ def test_notifier_resolves_alerts_alias_verifies_plain_room_and_sends_redacted_m
     )
 
     assert [call[0] for call in calls] == ["GET", "GET", "PUT"]
-    assert "%23alerts%3Aexample.test" in calls[0][1]
+    assert "%23operator-alerts%3Aexample.test" in calls[0][1]
     assert calls[1][1].endswith("/state/m.room.encryption")
     body = calls[2][2]["body"]
     assert "server_device_repaired" in body
@@ -122,3 +123,51 @@ def test_notifier_refuses_to_send_into_encrypted_alerts_room(monkeypatch, tmp_pa
     )
 
     assert [call[0] for call in calls] == ["GET", "GET"]
+
+
+def test_notifier_does_nothing_when_alerts_are_disabled(monkeypatch, tmp_path):
+    tng = _load_tng_adapter()
+    calls = []
+    fake_aiohttp = SimpleNamespace(
+        ClientTimeout=lambda **kwargs: kwargs,
+        ClientSession=lambda **kwargs: _Session([], calls, **kwargs),
+    )
+    monkeypatch.setitem(sys.modules, "aiohttp", fake_aiohttp)
+    adapter = _adapter(tng, tmp_path)
+    adapter._adapter_alerts_enabled = False
+    client = SimpleNamespace(mxid="@affected:example.test", device_id="AFFECTED")
+
+    asyncio.run(
+        adapter._emit_device_key_alert(
+            client=client,
+            status="server_repair_failed",
+            local_ed25519="local-public-key",
+            server_ed25519="server-public-key",
+        )
+    )
+
+    assert calls == []
+
+
+def test_notifier_requires_an_explicit_room_even_when_enabled(monkeypatch, tmp_path):
+    tng = _load_tng_adapter()
+    calls = []
+    fake_aiohttp = SimpleNamespace(
+        ClientTimeout=lambda **kwargs: kwargs,
+        ClientSession=lambda **kwargs: _Session([], calls, **kwargs),
+    )
+    monkeypatch.setitem(sys.modules, "aiohttp", fake_aiohttp)
+    adapter = _adapter(tng, tmp_path)
+    adapter._adapter_alert_room_alias = ""
+    client = SimpleNamespace(mxid="@affected:example.test", device_id="AFFECTED")
+
+    asyncio.run(
+        adapter._emit_device_key_alert(
+            client=client,
+            status="server_repair_failed",
+            local_ed25519="local-public-key",
+            server_ed25519="server-public-key",
+        )
+    )
+
+    assert calls == []

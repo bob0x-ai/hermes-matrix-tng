@@ -91,10 +91,6 @@ def _profile_env_scope(settings: MatrixProfileSettings):
         "MATRIX_RECOVERY_KEY": settings.recovery_key,
         "MATRIX_RECOVERY_KEY_OUTPUT_FILE": settings.recovery_key_output_file,
         "MATRIX_DEVICE_KEY_MISMATCH_POLICY": settings.device_key_mismatch_policy,
-        "MATRIX_ADAPTER_ALERT_HOMESERVER": settings.adapter_alert_homeserver,
-        "MATRIX_ADAPTER_ALERT_TOKEN": settings.adapter_alert_token,
-        "MATRIX_ADAPTER_ALERT_ROOM": settings.adapter_alert_room_alias,
-        "MATRIX_ADAPTER_ALERT_USER_ID": settings.adapter_alert_user_id,
         "MATRIX_ALLOW_PUBLIC_ROOMS": "true" if settings.allow_public_rooms else "false",
         "MATRIX_THREAD_REQUIRE_MENTION": "true" if settings.thread_require_mention else "false",
         "MATRIX_IGNORE_USER_PATTERNS": ",".join(settings.ignored_user_patterns),
@@ -147,7 +143,8 @@ class MatrixAdapter(_bundled.MatrixAdapter):
         self._e2ee_mode = s.e2ee_mode
         self._encryption = s.e2ee_mode != "off"
         self._device_key_mismatch_policy = s.device_key_mismatch_policy
-        self._adapter_alert_homeserver = s.adapter_alert_homeserver or s.homeserver
+        self._adapter_alerts_enabled = s.adapter_alerts_enabled
+        self._adapter_alert_homeserver = s.adapter_alert_homeserver
         self._adapter_alert_token = s.adapter_alert_token
         self._adapter_alert_room_alias = s.adapter_alert_room_alias
         self._adapter_alert_user_id = s.adapter_alert_user_id

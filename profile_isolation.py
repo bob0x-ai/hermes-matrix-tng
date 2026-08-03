@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from agent.secret_scope import UnscopedSecretError, get_secret
-from hermes_constants import get_hermes_home
+from hermes_constants import get_hermes_home, get_process_hermes_home
 
 
 def _as_bool(value: Any, default: bool) -> bool:
@@ -43,6 +43,39 @@ def _secret(name: str, default: str = "") -> str:
         # gateway is multiplexing. In that path os.environ is the default
         # profile's own source and is safe for compatibility with Hermes.
         return os.getenv(name, default) or ""
+
+
+def _default_matrix_alert_options() -> Mapping[str, Any]:
+    """Load non-secret notifier options from the process/default config.yaml.
+
+    Alerting is one shared gateway capability, rather than a credential owned
+    by whichever Matrix profile happens to detect an incident. In multiplex
+    mode, the context-local home is a secondary profile, so use Hermes's
+    process-home resolver deliberately instead of ``get_hermes_home()``.
+    """
+    try:
+        import yaml
+    except ImportError:
+        return {}
+    try:
+        config_path = get_process_hermes_home() / "config.yaml"
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except (OSError, TypeError, ValueError, yaml.YAMLError):
+        return {}
+    if not isinstance(data, Mapping):
+        return {}
+    platforms = data.get("platforms") or {}
+    if not isinstance(platforms, Mapping):
+        return {}
+    matrix = platforms.get("matrix") or {}
+    if not isinstance(matrix, Mapping):
+        return {}
+    # Hermes preserves platform-specific options below ``extra`` at runtime;
+    # accepting it here also lets operators use the conventional nested form.
+    extra = matrix.get("extra") or {}
+    if not isinstance(extra, Mapping):
+        extra = {}
+    return {**extra, **matrix}
 
 
 def persist_matrix_access_token(profile_home: Path, access_token: str) -> bool:
@@ -106,6 +139,7 @@ class MatrixProfileSettings:
     device_key_mismatch_policy: str
     recovery_key: str
     recovery_key_output_file: str
+    adapter_alerts_enabled: bool
     adapter_alert_homeserver: str
     adapter_alert_token: str
     adapter_alert_room_alias: str
@@ -150,17 +184,14 @@ def resolve_matrix_profile_settings(config: Any, profile_home: str | Path | None
             return extra[extra_key]
         return _secret(env_name, str(default) if default != "" else "")
 
-    def adapter_alert_value(extra_key: str, profile_env: str, global_env: str) -> str:
-        """Resolve the intentional process-global adapter notifier identity.
+    alert_options = _default_matrix_alert_options()
 
-        It is one operator account shared by all Matrix profiles, not a
-        profile credential. Snapshot it now so later async recovery work does
-        not consult the mutable process environment.
-        """
-        if extra_key in extra and extra[extra_key] is not None:
-            return str(extra[extra_key])
-        profile_value = _secret(profile_env, "")
-        return str(profile_value or os.getenv(global_env, ""))
+    def alert_option(name: str, default: Any = "") -> Any:
+        return alert_options.get(name, default)
+
+    def alert_text(name: str) -> str:
+        configured = alert_option(name, "")
+        return str(configured).strip() if configured is not None else ""
 
     homeserver = str(value("homeserver", "MATRIX_HOMESERVER", "")).rstrip("/")
     token = str(getattr(config, "token", None) or value("access_token", "MATRIX_ACCESS_TOKEN", ""))
@@ -206,18 +237,11 @@ def resolve_matrix_profile_settings(config: Any, profile_home: str | Path | None
         device_key_mismatch_policy=device_key_mismatch_policy,
         recovery_key=_secret("MATRIX_RECOVERY_KEY", ""),
         recovery_key_output_file=_secret("MATRIX_RECOVERY_KEY_OUTPUT_FILE", ""),
-        adapter_alert_homeserver=adapter_alert_value(
-            "adapter_alert_homeserver", "MATRIX_ADAPTER_ALERT_HOMESERVER", "HERMES_MATRIX_ADAPTER_ALERT_HOMESERVER"
-        ).rstrip("/"),
-        adapter_alert_token=adapter_alert_value(
-            "adapter_alert_token", "MATRIX_ADAPTER_ALERT_TOKEN", "HERMES_MATRIX_ADAPTER_ALERT_TOKEN"
-        ),
-        adapter_alert_room_alias=adapter_alert_value(
-            "adapter_alert_room_alias", "MATRIX_ADAPTER_ALERT_ROOM", "HERMES_MATRIX_ADAPTER_ALERT_ROOM"
-        ),
-        adapter_alert_user_id=adapter_alert_value(
-            "adapter_alert_user_id", "MATRIX_ADAPTER_ALERT_USER_ID", "HERMES_MATRIX_ADAPTER_ALERT_USER_ID"
-        ),
+        adapter_alerts_enabled=_as_bool(alert_option("alerts", False), False),
+        adapter_alert_homeserver=alert_text("alerts_homeserver").rstrip("/"),
+        adapter_alert_token=str(os.getenv("HERMES_MATRIX_ADAPTER_ALERT_TOKEN", "")),
+        adapter_alert_room_alias=alert_text("alerts_room"),
+        adapter_alert_user_id=alert_text("alerts_user_id"),
         allowed_users=_as_csv(value("allowed_users", "MATRIX_ALLOWED_USERS", "")),
         allowed_rooms=_as_csv(value("allowed_rooms", "MATRIX_ALLOWED_ROOMS", "")),
         free_response_rooms=_as_csv(value("free_response_rooms", "MATRIX_FREE_RESPONSE_ROOMS", "")),

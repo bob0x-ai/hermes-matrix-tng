@@ -16,8 +16,9 @@ Before deployment:
   profile has its own `MATRIX_PASSWORD`, or expect the explicit
   `server_repair_needs_uia` status.
 - Read `RECOVERY.md` and `ALERTING.md`. Provision the optional dedicated
-  `@matrix-adapter` notifier and unencrypted `#alerts` room only on the target
-  homeserver; do not copy notifier credentials into this repository.
+  `@matrix-adapter` notifier and explicitly configured unencrypted alert room
+  only on the target homeserver; do not copy notifier credentials into this
+  repository.
 
 For the single-process systemd deployment, check the *active profile's*
 `gateway.multiplex_profiles` value (not only the root config). Install the TNG

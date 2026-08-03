@@ -18,3 +18,24 @@ Start with [AGENTS.md](AGENTS.md). Supporting documents:
 The current production override remains in
 `/home/ubuntu/projects/hermes-matrix-user-plugin` and must not be replaced until
 the TNG test and pilot gates have passed.
+
+## Optional Matrix operator alerts
+
+TNG can send redacted Matrix recovery incidents through a dedicated notifier
+account. Provision that account, its access token, and an **unencrypted** alert
+room outside the plugin. Then configure the shared/default Hermes
+`config.yaml`:
+
+```yaml
+platforms:
+  matrix:
+    alerts: true
+    alerts_homeserver: https://matrix.example.org
+    alerts_user_id: "@matrix-adapter:example.org"
+    alerts_room: "#operator-alerts:example.org"
+```
+
+Provide the matching token only through the gateway's protected environment:
+`HERMES_MATRIX_ADAPTER_ALERT_TOKEN`. With `alerts: false` (the default), TNG
+only writes the incident to Hermes logs. See [ALERTING.md](ALERTING.md) for the
+complete provisioning and delivery contract.
