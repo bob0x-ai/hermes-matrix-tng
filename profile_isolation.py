@@ -8,6 +8,8 @@ async work does not consult mutable process-global state.
 from __future__ import annotations
 
 import os
+import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -43,6 +45,53 @@ def _secret(name: str, default: str = "") -> str:
         return os.getenv(name, default) or ""
 
 
+def persist_matrix_access_token(profile_home: Path, access_token: str) -> bool:
+    """Atomically persist a reauthenticated profile-local Matrix token.
+
+    Device deletion invalidates the token bound to that Matrix device on some
+    homeservers. A successful same-device repair therefore needs to retain its
+    replacement token before reconnecting; otherwise the next boot would
+    recreate the failure. This never logs the token.
+    """
+    if not access_token:
+        return False
+    env_path = profile_home / ".env"
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = []
+    token_line = f"MATRIX_ACCESS_TOKEN={access_token}"
+    pattern = re.compile(r"^\s*(?:export\s+)?MATRIX_ACCESS_TOKEN\s*=.*$")
+    replaced = False
+    updated: list[str] = []
+    for line in lines:
+        if pattern.match(line):
+            updated.append(token_line)
+            replaced = True
+        else:
+            updated.append(line)
+    if not replaced:
+        updated.append(token_line)
+    content = "\n".join(updated) + "\n"
+    try:
+        env_path.parent.mkdir(parents=True, exist_ok=True)
+        mode = env_path.stat().st_mode & 0o777 if env_path.exists() else 0o600
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=env_path.parent, delete=False
+        ) as handle:
+            handle.write(content)
+            temporary_path = Path(handle.name)
+        os.chmod(temporary_path, mode)
+        os.replace(temporary_path, env_path)
+        return True
+    except OSError:
+        try:
+            temporary_path.unlink(missing_ok=True)
+        except (OSError, UnboundLocalError):
+            pass
+        return False
+
+
 @dataclass(frozen=True)
 class MatrixProfileSettings:
     profile_home: Path
@@ -54,12 +103,19 @@ class MatrixProfileSettings:
     password: str
     device_id: str
     e2ee_mode: str
+    device_key_mismatch_policy: str
     recovery_key: str
     recovery_key_output_file: str
+    adapter_alert_homeserver: str
+    adapter_alert_token: str
+    adapter_alert_room_alias: str
+    adapter_alert_user_id: str
     allowed_users: tuple[str, ...]
     allowed_rooms: tuple[str, ...]
     free_response_rooms: tuple[str, ...]
     require_mention: bool
+    thread_require_mention: bool
+    ignored_user_patterns: tuple[str, ...]
     auto_thread: bool
     dm_auto_thread: bool
     dm_mention_threads: bool
@@ -94,6 +150,18 @@ def resolve_matrix_profile_settings(config: Any, profile_home: str | Path | None
             return extra[extra_key]
         return _secret(env_name, str(default) if default != "" else "")
 
+    def adapter_alert_value(extra_key: str, profile_env: str, global_env: str) -> str:
+        """Resolve the intentional process-global adapter notifier identity.
+
+        It is one operator account shared by all Matrix profiles, not a
+        profile credential. Snapshot it now so later async recovery work does
+        not consult the mutable process environment.
+        """
+        if extra_key in extra and extra[extra_key] is not None:
+            return str(extra[extra_key])
+        profile_value = _secret(profile_env, "")
+        return str(profile_value or os.getenv(global_env, ""))
+
     homeserver = str(value("homeserver", "MATRIX_HOMESERVER", "")).rstrip("/")
     token = str(getattr(config, "token", None) or value("access_token", "MATRIX_ACCESS_TOKEN", ""))
     user_id = str(value("user_id", "MATRIX_USER_ID", ""))
@@ -102,6 +170,12 @@ def resolve_matrix_profile_settings(config: Any, profile_home: str | Path | None
     e2ee_mode = str(value("e2ee_mode", "MATRIX_E2EE_MODE", "")).strip().lower()
     if not e2ee_mode:
         e2ee_mode = "required" if _as_bool(value("encryption", "MATRIX_ENCRYPTION", False), False) else "off"
+
+    device_key_mismatch_policy = str(
+        value("device_key_mismatch_policy", "MATRIX_DEVICE_KEY_MISMATCH_POLICY", "repair")
+    ).strip().lower()
+    if device_key_mismatch_policy not in {"repair", "quarantine"}:
+        device_key_mismatch_policy = "repair"
 
     def integer(extra_key: str, env_name: str, default: int) -> int:
         try:
@@ -129,12 +203,31 @@ def resolve_matrix_profile_settings(config: Any, profile_home: str | Path | None
         password=password,
         device_id=device_id,
         e2ee_mode=e2ee_mode,
+        device_key_mismatch_policy=device_key_mismatch_policy,
         recovery_key=_secret("MATRIX_RECOVERY_KEY", ""),
         recovery_key_output_file=_secret("MATRIX_RECOVERY_KEY_OUTPUT_FILE", ""),
+        adapter_alert_homeserver=adapter_alert_value(
+            "adapter_alert_homeserver", "MATRIX_ADAPTER_ALERT_HOMESERVER", "HERMES_MATRIX_ADAPTER_ALERT_HOMESERVER"
+        ).rstrip("/"),
+        adapter_alert_token=adapter_alert_value(
+            "adapter_alert_token", "MATRIX_ADAPTER_ALERT_TOKEN", "HERMES_MATRIX_ADAPTER_ALERT_TOKEN"
+        ),
+        adapter_alert_room_alias=adapter_alert_value(
+            "adapter_alert_room_alias", "MATRIX_ADAPTER_ALERT_ROOM", "HERMES_MATRIX_ADAPTER_ALERT_ROOM"
+        ),
+        adapter_alert_user_id=adapter_alert_value(
+            "adapter_alert_user_id", "MATRIX_ADAPTER_ALERT_USER_ID", "HERMES_MATRIX_ADAPTER_ALERT_USER_ID"
+        ),
         allowed_users=_as_csv(value("allowed_users", "MATRIX_ALLOWED_USERS", "")),
         allowed_rooms=_as_csv(value("allowed_rooms", "MATRIX_ALLOWED_ROOMS", "")),
         free_response_rooms=_as_csv(value("free_response_rooms", "MATRIX_FREE_RESPONSE_ROOMS", "")),
         require_mention=_as_bool(value("require_mention", "MATRIX_REQUIRE_MENTION", True), True),
+        thread_require_mention=_as_bool(
+            value("thread_require_mention", "MATRIX_THREAD_REQUIRE_MENTION", False), False
+        ),
+        ignored_user_patterns=_as_csv(
+            value("ignore_user_patterns", "MATRIX_IGNORE_USER_PATTERNS", "")
+        ),
         auto_thread=_as_bool(value("auto_thread", "MATRIX_AUTO_THREAD", True), True),
         dm_auto_thread=_as_bool(value("dm_auto_thread", "MATRIX_DM_AUTO_THREAD", False), False),
         dm_mention_threads=_as_bool(value("dm_mention_threads", "MATRIX_DM_MENTION_THREADS", False), False),

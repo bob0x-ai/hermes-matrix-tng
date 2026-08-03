@@ -37,6 +37,7 @@ def test_settings_snapshot_uses_explicit_profile_home_and_config(monkeypatch, tm
     assert settings.access_token == "profile-token"
     assert settings.user_id == "@writer:example"
     assert settings.device_id == "WRITERDEVICE"
+    assert settings.device_key_mismatch_policy == "repair"
     assert settings.allowed_users == ("@owner:example",)
     assert settings.require_mention is False
 
@@ -59,3 +60,20 @@ def test_scoped_secret_is_authoritative_for_each_profile(monkeypatch, tmp_path):
     assert first_settings.recovery_key == "first-key"
     assert second_settings.recovery_key == "second-key"
     assert first_settings.crypto_db_path != second_settings.crypto_db_path
+
+
+def test_adapter_alert_identity_is_snapshotted_from_explicit_global_config(monkeypatch, tmp_path):
+    secret_scope.set_multiplex_active(True)
+    monkeypatch.setenv("HERMES_MATRIX_ADAPTER_ALERT_HOMESERVER", "https://alerts.example")
+    monkeypatch.setenv("HERMES_MATRIX_ADAPTER_ALERT_TOKEN", "alert-token")
+    monkeypatch.setenv("HERMES_MATRIX_ADAPTER_ALERT_USER_ID", "@matrix-adapter:alerts.example")
+    scope = secret_scope.set_secret_scope({})
+    try:
+        settings = resolve_matrix_profile_settings(SimpleNamespace(extra={}), tmp_path / "writer")
+    finally:
+        secret_scope.reset_secret_scope(scope)
+        secret_scope.set_multiplex_active(False)
+
+    assert settings.adapter_alert_homeserver == "https://alerts.example"
+    assert settings.adapter_alert_token == "alert-token"
+    assert settings.adapter_alert_user_id == "@matrix-adapter:alerts.example"

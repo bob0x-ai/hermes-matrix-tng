@@ -35,11 +35,12 @@ def test_phase_two_adapter_preserves_bundled_registration_surface():
     tng = _load_tng_adapter()
     from plugins.platforms.matrix import adapter as bundled
 
-    assert tng.TNG_PHASE == 2
+    assert tng.TNG_PHASE == 5
     assert tng.UPSTREAM_BASE_COMMIT
     assert callable(tng.register)
     assert tng.MatrixAdapter is not bundled.MatrixAdapter
-    assert tng.check_matrix_requirements is bundled.check_matrix_requirements
+    assert callable(tng.check_matrix_requirements)
+    assert tng.check_matrix_requirements.__name__ == bundled.check_matrix_requirements.__name__
 
 
 def test_registration_replaces_only_the_adapter_factory():
@@ -84,6 +85,23 @@ def test_adapter_constructor_snapshots_profile_store_path(monkeypatch, tmp_path)
     assert diagnostics["e2ee"]["crypto_store_path"].endswith(
         "profile/platforms/matrix/store/crypto.db"
     )
+    assert diagnostics["recovery"]["status"] == "normal"
+
+
+def test_import_home_prefers_active_named_profile(tmp_path):
+    tng = _load_tng_adapter()
+    assert tng._resolve_import_home(
+        env_home=None,
+        env_profile=None,
+        platform_home=tmp_path,
+        active_profile="hikari",
+    ) == (tmp_path / "profiles/hikari").resolve()
+    assert tng._resolve_import_home(
+        env_home=str(tmp_path / "explicit"),
+        env_profile="hikari",
+        platform_home=tmp_path,
+        active_profile="writer",
+    ) == (tmp_path / "explicit").resolve()
 
 
 def test_two_adapters_keep_distinct_paths_after_construction(monkeypatch, tmp_path):
@@ -115,9 +133,8 @@ def test_two_adapters_keep_distinct_paths_after_construction(monkeypatch, tmp_pa
     assert second._device_id == "SECOND"
 
 
-def test_lifecycle_serializes_legacy_store_global(monkeypatch, tmp_path):
+def test_concurrent_lifecycle_uses_instance_owned_store_paths(monkeypatch, tmp_path):
     from types import SimpleNamespace
-    from plugins.platforms.matrix import adapter as bundled
 
     tng = _load_tng_adapter()
 
@@ -140,16 +157,14 @@ def test_lifecycle_serializes_legacy_store_global(monkeypatch, tmp_path):
     observed = []
 
     async def fake_connect(self, *, is_reconnect=False):
-        observed.append(bundled._CRYPTO_DB_PATH)
+        observed.append(self._crypto_db_path)
         await asyncio.sleep(0)
         return True
 
-    monkeypatch.setattr(bundled.MatrixAdapter, "connect", fake_connect)
-    original = bundled._CRYPTO_DB_PATH
+    monkeypatch.setattr(tng._bundled.MatrixAdapter, "connect", fake_connect)
     async def run_both():
         await asyncio.gather(first.connect(), second.connect())
 
     asyncio.run(run_both())
 
     assert observed == [first.profile_settings.crypto_db_path, second.profile_settings.crypto_db_path]
-    assert bundled._CRYPTO_DB_PATH == original

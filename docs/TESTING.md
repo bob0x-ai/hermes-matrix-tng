@@ -26,6 +26,12 @@ of cross-adapter database ownership. Do not use production databases.
 Use disposable accounts and rooms to prove real sync, Olm/Megolm operation,
 cross-signing/recovery behavior, concurrent adapters, and cold restart.
 
+For the bounded-initial-sync contract, run
+`scripts/live_existing_encrypted_room_test.py --run` after its one-time
+`--bootstrap --run` setup. It reuses two persistent disposable accounts and
+asserts a decrypted encrypted message before and immediately after restart in
+the same existing room.
+
 ### 4. Narrow production pilot
 
 Mocks and disposable accounts cannot prove compatibility with existing device
@@ -48,4 +54,3 @@ approval and verified backups, then soak before expanding.
 Tests must scrub the host Matrix environment or explicitly replace the secret
 scope. A test expecting an unset Matrix variable must not inherit the VPS's
 live `.env`. Never log secret values in assertion failures.
-

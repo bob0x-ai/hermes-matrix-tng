@@ -2,7 +2,71 @@
 
 ## Current Phase
 
-Phase 5 — Controlled Production Pilot: pending explicit approval.
+Phase 5 — Controlled Production Pilot: live validation passed on 2026-08-04.
+
+### Live validation result (2026-08-04)
+
+- A single gateway process successfully connected four independent Matrix
+  profiles (`hikari`, `lens`, `writer`, and `yan-cgo`) using four independent
+  SQLite crypto stores.
+- The initial live pass automatically repaired three verified server/local
+  device-key mismatches (`lens`, active writer identity `@hikari-writer2`, and
+  `yan-cgo`) with password UIA, replacement-token persistence, local-key
+  upload, and post-repair verification. Hikari had been repaired immediately
+  before that pass using the same path.
+- The following clean startup used the persisted tokens and required no repair
+  or reauthentication for any Matrix profile.
+- `scout` and `tool` are now explicitly Matrix-disabled. The root/default
+  profile remains intentionally skipped as a secondary because it owns the
+  webhook listener.
+- TNG changed initial-sync dispatch to omit historical room events during
+  `connect()`, retaining only non-room/to-device E2EE processing. This removes
+  an unbounded startup blocker for multiplexed profiles. The full suite now
+  has 20 passing tests.
+- The final production-readiness review fixes are applied: ignored-user and
+  thread mention policy are immutable per-profile settings, and inherited
+  diagnostics run inside the owning profile's environment scope. Two
+  conflicting-profile regression tests cover both cases.
+- The persistent disposable Tuwunel test revalidated an encrypted send into an
+  existing room immediately after a two-adapter restart. Both pre- and
+  post-restart sends decrypted successfully using the same disposable stores.
+- The gateway's normal shutdown wedged while an active Lens turn consumed
+  memory; systemd restarted it after a forced kill. This was outside Matrix
+  adapter teardown, but deployment should avoid restarting during active
+  turns until Hermes' shutdown path is separately hardened.
+
+Phase 5 Step 1 (preflight hardening) is complete on branch
+`phase-5-controlled-pilot`. No gateway process, production plugin, or Matrix
+store was changed.
+
+### Phase 5 recovery and operator-notification hardening
+
+- TNG now treats the intact local crypto store as authoritative for its
+  explicitly configured device ID. On a server/local identity-key mismatch it
+  records redacted fingerprints, removes the conflicting server record,
+  re-uploads local keys, and verifies the result before sync starts.
+- The destructive server step is explicit and audited, never silent. Tuwunel
+  requires password UIA for it; token-only profiles report
+  `server_repair_needs_uia` without mutating either local store.
+- A real local Tuwunel probe confirmed that UIA requirement against the
+  reusable test account. The probe used a temporary store and did not touch a
+  production account or store.
+- Optional dedicated `@matrix-adapter` alerts are implemented and covered by
+  mocked Matrix API tests. The notifier only sends a redacted plain message to
+  a resolvable, confirmed-unencrypted `#alerts` room; all other outcomes fall
+  back to Hermes logs. It has not been provisioned on this old host.
+- Focused suite: 17 passed.
+
+### Phase 5 Step 2 — Read-only preflight
+
+- Confirmed active user units: `hermes-gateway.service` (default), plus
+  `hermes-gateway-hikari.service`, `hermes-gateway-lens.service`,
+  `hermes-gateway-writer.service`, `hermes-gateway-yan-cgo.service`, and the
+  non-Matrix `hermes-gateway-scout.service`.
+- Confirmed each Matrix unit uses the installed Hermes checkout and its named
+  profile flag; no unit definitions or environment files were changed.
+- Pilot identities and maintenance-window timing remain to be selected before
+  the required complete store backup and controlled stop/start sequence.
 
 Phase 0 baseline/inventory is complete for non-destructive capture; checksum
 capture remains explicitly deferred until a safe backup window.
@@ -185,6 +249,27 @@ Phase 4 passed for disposable two-profile connect/reconnect. The inherited
 
 Pending explicit user approval and a maintenance window. Phase 5 must not
 touch the production gateways or Matrix stores automatically.
+
+### Post-pilot isolation finding
+
+The first real gateway pilot loaded TNG but exposed the inherited module-global
+SQLite path problem under multiplexed long-lived sync tasks. All gateways were
+stopped afterward. TNG now vendors the recorded adapter revision and uses
+instance-owned `_store_dir` and `_crypto_db_path` references throughout its
+runtime methods; focused tests pass. A disposable multi-profile restart test
+was completed on 2026-08-03 with two fresh Continuwuity accounts and temporary
+profile homes. Both TNG adapters connected concurrently, shut down, and
+reconnected from the same per-profile SQLite stores (`[True, True]` on both
+passes); no `database is locked` errors occurred. The disposable homeserver
+and temporary data were removed afterward. This validates the path fix in
+isolation but does not authorize another production pilot.
+
+An isolated pilot home was then prepared and validated offline. Its profile
+discovery contains only `default`, `writer`, and `yan-cgo` (the default entry
+is mandatory in Hermes multiplex mode); the default overlay has no Matrix
+credentials or platform configuration. TNG is the selected `matrix-platform`
+plugin. Tuwunel is not required for this discovery/configuration check.
+is required before another production attempt.
 
 ## Deployment State
 
