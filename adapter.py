@@ -1,9 +1,7 @@
-"""Phase 1 compatibility bridge for the Hermes Matrix platform plugin.
+"""Profile-isolated Hermes Matrix adapter.
 
-This is intentionally not the TNG adapter implementation yet. It exposes the
-same registration and factory surface as the installed bundled adapter while
-keeping the project independently versioned. Phase 2 will replace the bridge
-with an instance-isolated adapter derived from the recorded upstream base.
+The implementation reuses Hermes' bundled Matrix adapter while scoping its
+legacy process-wide paths and environment reads to each adapter instance.
 """
 
 from __future__ import annotations
@@ -14,7 +12,52 @@ import asyncio
 import os
 import threading
 
-from plugins.platforms.matrix import adapter as _bundled
+from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+
+def _resolve_import_home(
+    *, env_home: str | None, env_profile: str | None, platform_home: Path, active_profile: str | None
+) -> Path | None:
+    """Choose the profile home used while importing legacy Hermes modules."""
+    if env_home and env_home.strip():
+        return Path(env_home).expanduser().resolve()
+    profile = (env_profile or active_profile or "").strip()
+    if profile and profile != "default":
+        return (platform_home / "profiles" / profile).resolve()
+    return platform_home.resolve()
+
+
+def _import_bundled_adapter():
+    """Import the legacy adapter under the active profile home.
+
+    Several Hermes platform/base modules initialize path globals at import
+    time. Importing them with an unset ``HERMES_HOME`` while a named profile is
+    active causes a misleading fallback to the default home. This scoped import
+    prevents that warning and gives the inherited module globals the primary
+    profile's initial context; per-adapter lifecycle scopes handle secondary
+    profiles afterward.
+    """
+    platform_home = Path.home() / ".hermes"
+    active_file = platform_home / "active_profile"
+    try:
+        active_profile = active_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        active_profile = None
+    home = _resolve_import_home(
+        env_home=os.environ.get("HERMES_HOME"),
+        env_profile=os.environ.get("HERMES_PROFILE"),
+        platform_home=platform_home,
+        active_profile=active_profile,
+    )
+    token = set_hermes_home_override(home)
+    try:
+        from plugins.platforms.matrix import adapter as bundled
+        return bundled
+    finally:
+        reset_hermes_home_override(token)
+
+
+_bundled = _import_bundled_adapter()
 
 try:
     from .profile_isolation import MatrixProfileSettings, resolve_matrix_profile_settings
@@ -25,7 +68,7 @@ except ImportError as exc:
 
 UPSTREAM_BASE_COMMIT = "bc747001eec58150aba08e586ff1e7a25fc532aa"
 UPSTREAM_ORIGIN_MAIN_AT_BASELINE = "024f3e044bfd89ee226afc604fffafc1c2005f7ec"
-TNG_PHASE = 2
+TNG_PHASE = 5
 
 @contextmanager
 def _bundled_store_scope(settings: MatrixProfileSettings):

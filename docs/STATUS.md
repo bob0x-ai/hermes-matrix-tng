@@ -4,6 +4,10 @@
 
 Phase 5 — Controlled Production Pilot: pending explicit approval.
 
+Phase 5 Step 1 (preflight hardening) is complete on branch
+`phase-5-controlled-pilot`. No gateway process, production plugin, or Matrix
+store was changed.
+
 Phase 0 baseline/inventory is complete for non-destructive capture; checksum
 capture remains explicitly deferred until a safe backup window.
 

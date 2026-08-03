@@ -35,7 +35,7 @@ def test_phase_two_adapter_preserves_bundled_registration_surface():
     tng = _load_tng_adapter()
     from plugins.platforms.matrix import adapter as bundled
 
-    assert tng.TNG_PHASE == 2
+    assert tng.TNG_PHASE == 5
     assert tng.UPSTREAM_BASE_COMMIT
     assert callable(tng.register)
     assert tng.MatrixAdapter is not bundled.MatrixAdapter
@@ -84,6 +84,22 @@ def test_adapter_constructor_snapshots_profile_store_path(monkeypatch, tmp_path)
     assert diagnostics["e2ee"]["crypto_store_path"].endswith(
         "profile/platforms/matrix/store/crypto.db"
     )
+
+
+def test_import_home_prefers_active_named_profile(tmp_path):
+    tng = _load_tng_adapter()
+    assert tng._resolve_import_home(
+        env_home=None,
+        env_profile=None,
+        platform_home=tmp_path,
+        active_profile="hikari",
+    ) == (tmp_path / "profiles/hikari").resolve()
+    assert tng._resolve_import_home(
+        env_home=str(tmp_path / "explicit"),
+        env_profile="hikari",
+        platform_home=tmp_path,
+        active_profile="writer",
+    ) == (tmp_path / "explicit").resolve()
 
 
 def test_two_adapters_keep_distinct_paths_after_construction(monkeypatch, tmp_path):
