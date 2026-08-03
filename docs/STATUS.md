@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 4 — Disposable Matrix Integration Environment: in progress.
+Phase 5 — Controlled Production Pilot: pending explicit approval.
 
 Phase 0 baseline/inventory is complete for non-destructive capture; checksum
 capture remains explicitly deferred until a safe backup window.
@@ -164,6 +164,27 @@ Passed. The suite now has `9 passed` tests covering:
 
 Generic gateway routing and duplicate-credential behavior remain covered by the
 upstream Hermes test suite and will be exercised again during Phase 4.
+
+## Phase 4 Progress and Gate
+
+- Located the existing disposable Continuwuity E2EE harness.
+- Confirmed the dedicated test port was free.
+- Started the isolated Continuwuity harness with passwordless `sudo` after
+  explicit user authorization.
+- Connected two fresh Matrix accounts concurrently through two TNG adapters.
+- Verified distinct temporary crypto-store paths, clean disconnect, and a
+  second successful connect using the same stores/device IDs.
+- Removed the disposable container, network, and volume with `down -v`.
+- No production service, Tuwunel instance, profile home, or crypto store was
+  accessed.
+
+Phase 4 passed for disposable two-profile connect/reconnect. The inherited
+  Hermes profile-home fallback warning is retained for Phase 5 hardening.
+
+## Phase 5 Gate
+
+Pending explicit user approval and a maintenance window. Phase 5 must not
+touch the production gateways or Matrix stores automatically.
 
 ## Deployment State
 
