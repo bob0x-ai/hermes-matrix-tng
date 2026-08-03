@@ -114,6 +114,8 @@ class MatrixProfileSettings:
     allowed_rooms: tuple[str, ...]
     free_response_rooms: tuple[str, ...]
     require_mention: bool
+    thread_require_mention: bool
+    ignored_user_patterns: tuple[str, ...]
     auto_thread: bool
     dm_auto_thread: bool
     dm_mention_threads: bool
@@ -220,6 +222,12 @@ def resolve_matrix_profile_settings(config: Any, profile_home: str | Path | None
         allowed_rooms=_as_csv(value("allowed_rooms", "MATRIX_ALLOWED_ROOMS", "")),
         free_response_rooms=_as_csv(value("free_response_rooms", "MATRIX_FREE_RESPONSE_ROOMS", "")),
         require_mention=_as_bool(value("require_mention", "MATRIX_REQUIRE_MENTION", True), True),
+        thread_require_mention=_as_bool(
+            value("thread_require_mention", "MATRIX_THREAD_REQUIRE_MENTION", False), False
+        ),
+        ignored_user_patterns=_as_csv(
+            value("ignore_user_patterns", "MATRIX_IGNORE_USER_PATTERNS", "")
+        ),
         auto_thread=_as_bool(value("auto_thread", "MATRIX_AUTO_THREAD", True), True),
         dm_auto_thread=_as_bool(value("dm_auto_thread", "MATRIX_DM_AUTO_THREAD", False), False),
         dm_mention_threads=_as_bool(value("dm_mention_threads", "MATRIX_DM_MENTION_THREADS", False), False),

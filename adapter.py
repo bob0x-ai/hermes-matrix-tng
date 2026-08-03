@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 import asyncio
 import os
+import re
 import threading
 
 from hermes_constants import reset_hermes_home_override, set_hermes_home_override
@@ -95,6 +96,8 @@ def _profile_env_scope(settings: MatrixProfileSettings):
         "MATRIX_ADAPTER_ALERT_ROOM": settings.adapter_alert_room_alias,
         "MATRIX_ADAPTER_ALERT_USER_ID": settings.adapter_alert_user_id,
         "MATRIX_ALLOW_PUBLIC_ROOMS": "true" if settings.allow_public_rooms else "false",
+        "MATRIX_THREAD_REQUIRE_MENTION": "true" if settings.thread_require_mention else "false",
+        "MATRIX_IGNORE_USER_PATTERNS": ",".join(settings.ignored_user_patterns),
     }
     previous = {key: os.environ.get(key) for key in values}
     try:
@@ -153,6 +156,17 @@ class MatrixAdapter(_bundled.MatrixAdapter):
         self._allowed_room_ids = set(s.allowed_rooms)
         self._free_rooms = set(s.free_response_rooms)
         self._require_mention = s.require_mention
+        self._thread_require_mention = s.thread_require_mention
+        self._ignored_user_patterns = []
+        for pattern in s.ignored_user_patterns:
+            try:
+                self._ignored_user_patterns.append(re.compile(pattern))
+            except re.error as exc:
+                _bundled.logger.warning(
+                    "Matrix: ignoring invalid MATRIX_IGNORE_USER_PATTERNS entry %r: %s",
+                    pattern,
+                    exc,
+                )
         self._auto_thread = s.auto_thread
         self._dm_auto_thread = s.dm_auto_thread
         self._dm_mention_threads = s.dm_mention_threads
@@ -201,7 +215,8 @@ class MatrixAdapter(_bundled.MatrixAdapter):
 
     def get_diagnostics(self):
         with type(self)._store_path_lock:
-            result = super().get_diagnostics()
+            with _profile_env_scope(self.profile_settings):
+                result = super().get_diagnostics()
         if isinstance(result, dict):
             result["recovery"] = {
                 "status": self._device_key_recovery_status,

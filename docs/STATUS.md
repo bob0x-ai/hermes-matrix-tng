@@ -22,7 +22,14 @@ Phase 5 — Controlled Production Pilot: live validation passed on 2026-08-04.
 - TNG changed initial-sync dispatch to omit historical room events during
   `connect()`, retaining only non-room/to-device E2EE processing. This removes
   an unbounded startup blocker for multiplexed profiles. The full suite now
-  has 18 passing tests.
+  has 20 passing tests.
+- The final production-readiness review fixes are applied: ignored-user and
+  thread mention policy are immutable per-profile settings, and inherited
+  diagnostics run inside the owning profile's environment scope. Two
+  conflicting-profile regression tests cover both cases.
+- The persistent disposable Tuwunel test revalidated an encrypted send into an
+  existing room immediately after a two-adapter restart. Both pre- and
+  post-restart sends decrypted successfully using the same disposable stores.
 - The gateway's normal shutdown wedged while an active Lens turn consumed
   memory; systemd restarted it after a forced kill. This was outside Matrix
   adapter teardown, but deployment should avoid restarting during active

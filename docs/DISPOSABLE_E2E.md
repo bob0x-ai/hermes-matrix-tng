@@ -48,6 +48,29 @@ correct, but that warning is retained as a Phase 5 hardening item.
 Phase 4 passes for the disposable two-profile connect/reconnect gate. It does
 not authorize a production pilot.
 
+## Existing encrypted-room restart check (2026-08-04)
+
+The production-readiness review identified one additional contract: after a
+restart, TNG must be able to send into an already-existing encrypted room
+without replaying historic room events or requiring manual state backfill.
+
+`scripts/live_existing_encrypted_room_test.py` covers that contract against
+the local Tuwunel service. On its first use, run it with `--bootstrap --run`:
+it creates exactly two persistent disposable accounts and stores their
+credentials, device IDs, crypto stores, and encrypted room outside this
+repository under `~/.local/state/hermes-matrix-tng/disposable-e2e/`, mode
+0600. Subsequent runs use only `--run` and reuse those same accounts and
+stores.
+
+The 2026-08-04 run passed: both TNG adapters connected, exchanged an encrypted
+message, disconnected, recreated from the same profile stores, then exchanged
+another encrypted message immediately in the same room. The test uses no
+production Matrix identity, profile home, crypto store, or gateway process.
+
+The disposable accounts deliberately have no configured recovery-key output
+file, so Mautrix's cross-signing warnings are expected and non-fatal for this
+specific transport/decryption check.
+
 ## Device-key recovery probe
 
 `scripts/live_device_key_recovery_test.py --run` uses the reusable local
