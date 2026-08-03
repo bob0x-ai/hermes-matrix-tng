@@ -7,6 +7,9 @@
   `bc747001eec58150aba08e586ff1e7a25fc532aa`.
 - Runtime crypto-store paths are instance-owned; the inherited module-global
   path collision has been removed.
+- Automatic server-device deletion on key mismatch is disabled. TNG records a
+  non-secret `device-key-mismatches.jsonl` evidence file beside the store and
+  requires explicit operator recovery.
 - Local suite: 10 tests passing.
 - Disposable Tuwunel test: two concurrent encrypted DM profiles connected,
   exchanged messages in both directions, and reconnected from the same stores.

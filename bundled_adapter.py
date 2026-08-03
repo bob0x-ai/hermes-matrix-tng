@@ -54,6 +54,7 @@ from __future__ import annotations
 import asyncio
 import array
 import inspect
+import json
 import logging
 import mimetypes
 import os
@@ -732,6 +733,27 @@ def _redact_matrix_value(value: Any) -> str:
     return "***"
 
 
+def _record_device_key_mismatch(*, client: Any, local_ed25519: str, server_ed25519: str | None, store_path: Path) -> None:
+    """Persist non-secret mismatch evidence without mutating Matrix state."""
+    try:
+        store_path.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "event": "device_key_mismatch",
+            "timestamp": time.time(),
+            "user_id": str(getattr(client, "mxid", "")),
+            "device_id": str(getattr(client, "device_id", "")),
+            "local_key_present": bool(local_ed25519),
+            "server_key_present": bool(server_ed25519),
+            "store_path": str(store_path),
+            "store_exists": store_path.exists(),
+            "store_size": store_path.stat().st_size if store_path.exists() else 0,
+        }
+        with (store_path.parent / "device-key-mismatches.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, sort_keys=True) + "\n")
+    except Exception:
+        logger.exception("Matrix: failed to record device-key mismatch evidence")
+
+
 def _write_matrix_recovery_key_output_file(recovery_key: str) -> Optional[Path]:
     """Write a generated Matrix recovery key to an operator-chosen file.
 
@@ -1307,6 +1329,12 @@ class MatrixAdapter(BasePlatformAdapter):
         server_ed25519 = self._extract_server_ed25519(our_keys)
 
         if server_ed25519 != local_ed25519:
+            _record_device_key_mismatch(
+                client=client,
+                local_ed25519=local_ed25519,
+                server_ed25519=server_ed25519,
+                store_path=self._crypto_db_path,
+            )
             if olm.account.shared:
                 logger.error(
                     "Matrix: server has different identity keys for device %s — "
@@ -1316,34 +1344,12 @@ class MatrixAdapter(BasePlatformAdapter):
                 )
                 return False
 
-            logger.warning(
-                "Matrix: server has stale keys for device %s — attempting re-upload",
+            logger.error(
+                "Matrix: refusing automatic device replacement for %s; "
+                "mismatch evidence was recorded and operator recovery is required",
                 client.device_id,
             )
-            try:
-                await client.api.request(
-                    client.api.Method.DELETE
-                    if hasattr(client.api, "Method")
-                    else "DELETE",
-                    f"/_matrix/client/v3/devices/{client.device_id}",
-                )
-                logger.info(
-                    "Matrix: deleted stale device %s from server", client.device_id
-                )
-            except Exception:
-                pass
-            try:
-                await olm.share_keys()
-            except Exception as exc:
-                logger.error(
-                    "Matrix: cannot upload device keys for %s: %s. "
-                    "Try generating a new access token to get a fresh device.",
-                    client.device_id,
-                    exc,
-                    exc_info=True,
-                )
-                return False
-            return await self._reverify_keys_after_upload(client, local_ed25519)
+            return False
 
         return True
 
