@@ -1,4 +1,4 @@
-name: matrix-platform
+name: matrix-platform-tng
 label: Matrix
 kind: platform
 version: 0.1.0-tng

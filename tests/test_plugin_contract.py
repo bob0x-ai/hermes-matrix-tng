@@ -26,7 +26,7 @@ def _load_tng_adapter():
 
 def test_manifest_declares_the_bundled_override_key():
     manifest = yaml.safe_load((ROOT / "plugin.yaml").read_text())
-    assert manifest["name"] == "matrix-platform"
+    assert manifest["name"] == "matrix-platform-tng"
     assert manifest["kind"] == "platform"
     assert manifest["version"] == "0.1.0-tng"
 

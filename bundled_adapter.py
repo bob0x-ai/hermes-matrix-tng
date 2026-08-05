@@ -141,6 +141,47 @@ from gateway.platforms.helpers import ThreadParticipationTracker
 
 logger = logging.getLogger(__name__)
 
+
+class _NoKeysToUploadFilter(logging.Filter):
+    """Drop mautrix's misleading no-op key-upload warning.
+
+    mautrix emits this at WARNING when ``share_keys()`` finds that the
+    homeserver already has enough one-time keys and the local store has no
+    new keys to publish.  That is a normal steady state, not a failed key
+    exchange.  Other crypto warnings, including invalid signatures, remain
+    visible.
+    """
+
+    _MESSAGE = "No one-time keys nor device keys got when trying to share keys"
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.getMessage() != self._MESSAGE
+
+
+logging.getLogger("mau.crypto").addFilter(_NoKeysToUploadFilter())
+
+
+class _MautrixCryptoLogger(logging.LoggerAdapter):
+    """Provide mautrix's non-standard trace levels on stdlib loggers.
+
+    Hermes initializes ``mau.crypto`` before mautrix installs its
+    ``TraceLogger`` class, so ``logging.getLogger()`` can return a plain
+    ``Logger``.  Mautrix calls ``trace()`` while handling encrypted to-device
+    events; without this adapter the handler crashes before room keys are
+    processed.
+    """
+
+    def trace(self, msg: Any, *args: Any, **kwargs: Any) -> None:
+        self.debug(msg, *args, **kwargs)
+
+    def silly(self, msg: Any, *args: Any, **kwargs: Any) -> None:
+        self.debug(msg, *args, **kwargs)
+
+
+def _mautrix_crypto_logger() -> _MautrixCryptoLogger:
+    return _MautrixCryptoLogger(logging.getLogger("mau.crypto"), {})
+
+
 _MATRIX_VOICE_WAVEFORM_BINS = 30
 
 
@@ -1062,6 +1103,10 @@ class MatrixAdapter(BasePlatformAdapter):
         )
         self._device_id_unverified: bool = False
 
+        # The mautrix/aiohttp client and its timers belong to the loop that
+        # connects the adapter. Cron delivery may invoke send() from a worker
+        # loop, so retain the adapter's home loop and marshal sends back to it.
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._client: Any = None  # mautrix.client.Client
         self._crypto_db: Any = None  # mautrix.util.async_db.Database
         self._sync_task: Optional[asyncio.Task] = None
@@ -1788,6 +1833,7 @@ class MatrixAdapter(BasePlatformAdapter):
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
         """Connect to the Matrix homeserver and start syncing."""
+        self._loop = asyncio.get_running_loop()
         self._device_id_unverified = False
         if self._client is not None:
             try:
@@ -2004,7 +2050,16 @@ class MatrixAdapter(BasePlatformAdapter):
                         await crypto_store.put_device_id(client.device_id)
 
                     crypto_state = _CryptoStateStore(state_store, self._joined_rooms)
-                    olm = OlmMachine(client, crypto_store, crypto_state)
+                    # Pass an explicit compatibility logger. In the Hermes
+                    # process, ``mau.crypto`` may already be a stdlib Logger
+                    # without mautrix's trace()/silly() extensions. A missing
+                    # trace() otherwise aborts encrypted to-device key events.
+                    olm = OlmMachine(
+                        client,
+                        crypto_store,
+                        crypto_state,
+                        log=_mautrix_crypto_logger(),
+                    )
                     olm.share_keys_min_trust = TrustState.UNVERIFIED
                     olm.send_keys_min_trust = TrustState.UNVERIFIED
 
@@ -2248,6 +2303,30 @@ class MatrixAdapter(BasePlatformAdapter):
 
         if not content:
             return SendResult(success=True)
+
+        # Cron delivery can execute on a separate asyncio loop from the one
+        # that owns the long-lived mautrix/aiohttp client. aiohttp's timeout
+        # context must be entered by a task on that owning loop; dispatching
+        # the complete send there avoids the misleading membership/timeout
+        # failures seen when cron uses the worker-loop path.
+        current_loop = asyncio.get_running_loop()
+        if self._loop is not None and current_loop != self._loop:
+            return await asyncio.wrap_future(
+                asyncio.run_coroutine_threadsafe(
+                    self._do_send(chat_id, content, reply_to, metadata),
+                    self._loop,
+                )
+            )
+
+        return await self._do_send(chat_id, content, reply_to, metadata)
+
+    async def _do_send(
+        self,
+        chat_id: str,
+        content: str,
+        reply_to: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> SendResult:
 
         formatted = self.format_message(content)
         chunks = self.truncate_message(formatted, self.max_message_length)
