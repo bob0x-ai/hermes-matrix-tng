@@ -38,6 +38,8 @@ def _recovery_adapter(tng, tmp_path, *, policy="repair"):
 
 
 def _fake_matrix(local_key, server_state):
+    # Existing recovery-flow tests isolate key equality and server lifecycle.
+    # Full signature verification has its own real-crypto regression below.
     class API:
         Method = SimpleNamespace(DELETE="DELETE")
 
@@ -97,6 +99,7 @@ def test_mismatch_repair_rebinds_server_to_local_identity_and_records_audit(tmp_
     server_state = {"key": "other-public-key"}
     client, olm = _fake_matrix(local_key, server_state)
     adapter = _recovery_adapter(tng, tmp_path)
+    adapter._has_valid_device_self_signature = lambda *_args: True
 
     assert asyncio.run(adapter._verify_device_keys_on_server(client, olm)) is True
 
@@ -125,6 +128,7 @@ def test_quarantine_policy_leaves_server_record_untouched(tmp_path):
     server_state = {"key": "other-public-key"}
     client, olm = _fake_matrix("local-public-key", server_state)
     adapter = _recovery_adapter(tng, tmp_path, policy="quarantine")
+    adapter._has_valid_device_self_signature = lambda *_args: True
 
     assert asyncio.run(adapter._verify_device_keys_on_server(client, olm)) is False
 
@@ -132,7 +136,7 @@ def test_quarantine_policy_leaves_server_record_untouched(tmp_path):
     assert olm.share_calls == 0
     assert server_state["key"] == "other-public-key"
     assert adapter._device_key_mismatch is True
-    assert adapter._device_key_recovery_status == "device_key_mismatch"
+    assert adapter._device_key_recovery_status == "identity_key_mismatch"
 
 
 def test_mismatch_repair_completes_password_uia_before_deleting_device(tmp_path):
@@ -142,6 +146,7 @@ def test_mismatch_repair_completes_password_uia_before_deleting_device(tmp_path)
     server_state = {"key": "other-public-key"}
     client, olm = _fake_matrix("local-public-key", server_state)
     adapter = _recovery_adapter(tng, tmp_path)
+    adapter._has_valid_device_self_signature = lambda *_args: True
     adapter._password = "test-password"
     calls = []
 
@@ -186,6 +191,7 @@ def test_mismatch_repair_reports_uia_requirement_without_password(tmp_path):
     server_state = {"key": "other-public-key"}
     client, olm = _fake_matrix("local-public-key", server_state)
     adapter = _recovery_adapter(tng, tmp_path)
+    adapter._has_valid_device_self_signature = lambda *_args: True
     adapter._password = ""
 
     async def requires_uia(*_args, **_kwargs):
@@ -201,3 +207,40 @@ def test_mismatch_repair_reports_uia_requirement_without_password(tmp_path):
         for line in (tmp_path / "store" / "device-key-mismatches.jsonl").read_text().splitlines()
     ]
     assert actions == ["detected", "server_repair_started", "server_delete_needs_uia"]
+
+
+def test_device_self_signature_validation_uses_complete_signed_record(tmp_path):
+    from mautrix.crypto.signature import sign_olm
+    from olm import Account
+
+    tng = _load_tng_adapter()
+    adapter = _recovery_adapter(tng, tmp_path)
+    account = Account()
+    user_id = "@tng-test:example.test"
+    device_id = "TNGTEST"
+    ed25519 = account.identity_keys["ed25519"]
+    record = {
+        "user_id": user_id,
+        "device_id": device_id,
+        "algorithms": ["m.olm.v1.curve25519-aes-sha2"],
+        "keys": {
+            f"curve25519:{device_id}": account.identity_keys["curve25519"],
+            f"ed25519:{device_id}": ed25519,
+        },
+    }
+    signature = str(sign_olm(dict(record), account))
+    signed_record = {
+        **record,
+        "signatures": {user_id: {f"ed25519:{device_id}": signature}},
+    }
+    device_keys = SimpleNamespace(serialize=lambda: signed_record)
+
+    assert adapter._has_valid_device_self_signature(
+        device_keys, user_id, device_id, ed25519
+    )
+
+    tampered = {**signed_record, "device_id": "OTHER"}
+    tampered_keys = SimpleNamespace(serialize=lambda: tampered)
+    assert not adapter._has_valid_device_self_signature(
+        tampered_keys, user_id, device_id, ed25519
+    )

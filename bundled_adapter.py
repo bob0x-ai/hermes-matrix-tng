@@ -1337,6 +1337,24 @@ class MatrixAdapter(BasePlatformAdapter):
                 return str(kval)
         return None
 
+    @staticmethod
+    def _has_valid_device_self_signature(
+        device_keys_obj: Any,
+        user_id: str,
+        device_id: str,
+        ed25519: str,
+    ) -> bool:
+        """Cryptographically verify a server device record's own signature."""
+        try:
+            from mautrix.crypto.signature import verify_signature_json
+
+            serialized = device_keys_obj.serialize()
+            return bool(
+                verify_signature_json(serialized, user_id, device_id, ed25519)
+            )
+        except Exception:
+            return False
+
     async def _reverify_keys_after_upload(
         self, client: Any, local_ed25519: str
     ) -> bool:
@@ -1363,6 +1381,14 @@ class MatrixAdapter(BasePlatformAdapter):
                 logger.error(
                     "Matrix: device %s has identity keys that do not match "
                     "this profile's local crypto store after upload",
+                    client.device_id,
+                )
+                return False
+            if not self._has_valid_device_self_signature(
+                dev, str(client.mxid), str(client.device_id), server_ed
+            ):
+                logger.error(
+                    "Matrix: device %s has an invalid self-signature after key upload",
                     client.device_id,
                 )
                 return False
@@ -1798,20 +1824,34 @@ class MatrixAdapter(BasePlatformAdapter):
 
         server_ed25519 = self._extract_server_ed25519(our_keys)
 
-        if server_ed25519 != local_ed25519:
+        signature_valid = bool(server_ed25519) and self._has_valid_device_self_signature(
+            our_keys,
+            str(client.mxid),
+            str(client.device_id),
+            server_ed25519,
+        )
+
+        if server_ed25519 != local_ed25519 or not signature_valid:
             self._device_key_mismatch = True
-            self._device_key_recovery_status = "device_key_mismatch"
+            invalid_reason = (
+                "identity_key_mismatch"
+                if server_ed25519 != local_ed25519
+                else "invalid_device_self_signature"
+            )
+            self._device_key_recovery_status = invalid_reason
             _record_device_key_mismatch(
                 client=client,
                 local_ed25519=local_ed25519,
                 server_ed25519=server_ed25519,
                 store_path=self._crypto_db_path,
+                detail=invalid_reason,
             )
             if getattr(self, "_device_key_mismatch_policy", "repair") == "quarantine":
                 logger.error(
-                    "Matrix: device %s has mismatched server identity keys; "
+                    "Matrix: device %s has an invalid server device record (%s); "
                     "quarantine policy leaves the server record unchanged",
                     client.device_id,
+                    invalid_reason,
                 )
                 await self._emit_device_key_alert(
                     client=client,
