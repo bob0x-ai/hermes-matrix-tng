@@ -63,7 +63,12 @@ def _fake_matrix(local_key, server_state):
             device_keys = {} if key is None else {
                 self.mxid: {
                     self.device_id: SimpleNamespace(
-                        keys={f"ed25519:{self.device_id}": key}
+                        keys={
+                            f"ed25519:{self.device_id}": key,
+                            f"curve25519:{self.device_id}": server_state.get(
+                                "curve", f"{local_key}-curve"
+                            ),
+                        }
                     )
                 }
             }
@@ -80,7 +85,10 @@ def _fake_matrix(local_key, server_state):
         def __init__(self):
             self.account = SimpleNamespace(
                 shared=True,
-                identity_keys={"ed25519": local_key},
+                identity_keys={
+                    "ed25519": local_key,
+                    "curve25519": f"{local_key}-curve",
+                },
             )
             self.share_calls = 0
 
@@ -88,6 +96,7 @@ def _fake_matrix(local_key, server_state):
             assert self.account.shared is False
             self.share_calls += 1
             server_state["key"] = local_key
+            server_state["curve"] = f"{local_key}-curve"
             self.account.shared = True
 
     return Client(), Olm()
@@ -137,6 +146,32 @@ def test_quarantine_policy_leaves_server_record_untouched(tmp_path):
     assert server_state["key"] == "other-public-key"
     assert adapter._device_key_mismatch is True
     assert adapter._device_key_recovery_status == "identity_key_mismatch"
+
+
+def test_curve25519_mismatch_repairs_device_even_when_signing_key_matches(tmp_path):
+    tng = _load_tng_adapter()
+    local_key = "local-public-key"
+    server_state = {
+        "key": local_key,
+        "curve": "wrong-encryption-key",
+    }
+    client, olm = _fake_matrix(local_key, server_state)
+    adapter = _recovery_adapter(tng, tmp_path)
+    adapter._has_valid_device_self_signature = lambda *_args: True
+
+    assert asyncio.run(adapter._verify_device_keys_on_server(client, olm)) is True
+
+    assert client.api.calls == [("DELETE", "/_matrix/client/v3/devices/TNGTEST")]
+    assert olm.share_calls == 1
+    assert server_state["curve"] == "local-public-key-curve"
+    assert adapter._device_key_recovery_status == "server_device_repaired"
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "store" / "device-key-mismatches.jsonl")
+        .read_text()
+        .splitlines()
+    ]
+    assert records[0]["detail"] == "encryption_key_mismatch"
 
 
 def test_mismatch_repair_completes_password_uia_before_deleting_device(tmp_path):

@@ -1338,6 +1338,14 @@ class MatrixAdapter(BasePlatformAdapter):
         return None
 
     @staticmethod
+    def _extract_server_curve25519(device_keys_obj: Any) -> Optional[str]:
+        """Extract the curve25519 encryption key from a DeviceKeys object."""
+        for kid, kval in (getattr(device_keys_obj, "keys", {}) or {}).items():
+            if str(kid).startswith("curve25519:"):
+                return str(kval)
+        return None
+
+    @staticmethod
     def _has_valid_device_self_signature(
         device_keys_obj: Any,
         user_id: str,
@@ -1356,7 +1364,7 @@ class MatrixAdapter(BasePlatformAdapter):
             return False
 
     async def _reverify_keys_after_upload(
-        self, client: Any, local_ed25519: str
+        self, client: Any, local_ed25519: str, local_curve25519: str
     ) -> bool:
         """Re-query the server after share_keys() and verify our ed25519 key matches."""
         if not client.device_id or self._device_id_unverified:
@@ -1377,9 +1385,10 @@ class MatrixAdapter(BasePlatformAdapter):
                 )
                 return False
             server_ed = self._extract_server_ed25519(dev)
-            if server_ed != local_ed25519:
+            server_curve = self._extract_server_curve25519(dev)
+            if server_ed != local_ed25519 or server_curve != local_curve25519:
                 logger.error(
-                    "Matrix: device %s has identity keys that do not match "
+                    "Matrix: device %s has signing/encryption identity keys that do not match "
                     "this profile's local crypto store after upload",
                     client.device_id,
                 )
@@ -1557,7 +1566,12 @@ class MatrixAdapter(BasePlatformAdapter):
             )
 
     async def _repair_server_device_keys(
-        self, client: Any, olm: Any, local_ed25519: str, server_ed25519: str | None
+        self,
+        client: Any,
+        olm: Any,
+        local_ed25519: str,
+        local_curve25519: str,
+        server_ed25519: str | None,
     ) -> bool:
         """Rebind this configured server device to its intact local identity.
 
@@ -1738,7 +1752,9 @@ class MatrixAdapter(BasePlatformAdapter):
             )
             return False
 
-        if not await self._reverify_keys_after_upload(client, local_ed25519):
+        if not await self._reverify_keys_after_upload(
+            client, local_ed25519, local_curve25519
+        ):
             self._device_key_recovery_status = "server_repair_failed"
             _record_device_key_mismatch(
                 client=client,
@@ -1804,6 +1820,7 @@ class MatrixAdapter(BasePlatformAdapter):
         our_user_devices = device_keys_map.get(str(client.mxid)) or {}
         our_keys = our_user_devices.get(str(client.device_id))
         local_ed25519 = olm.account.identity_keys.get("ed25519")
+        local_curve25519 = olm.account.identity_keys.get("curve25519")
 
         if not our_keys:
             logger.warning("Matrix: device keys missing from server — re-uploading")
@@ -1817,12 +1834,17 @@ class MatrixAdapter(BasePlatformAdapter):
                     except Exception as retry_exc:
                         logger.error("Matrix: failed to re-upload device keys after reauthentication: %s", retry_exc, exc_info=True)
                         return False
-                    return await self._reverify_keys_after_upload(client, local_ed25519)
+                    return await self._reverify_keys_after_upload(
+                        client, local_ed25519, local_curve25519
+                    )
                 logger.error("Matrix: failed to re-upload device keys: %s", exc, exc_info=True)
                 return False
-            return await self._reverify_keys_after_upload(client, local_ed25519)
+            return await self._reverify_keys_after_upload(
+                client, local_ed25519, local_curve25519
+            )
 
         server_ed25519 = self._extract_server_ed25519(our_keys)
+        server_curve25519 = self._extract_server_curve25519(our_keys)
 
         signature_valid = bool(server_ed25519) and self._has_valid_device_self_signature(
             our_keys,
@@ -1831,12 +1853,20 @@ class MatrixAdapter(BasePlatformAdapter):
             server_ed25519,
         )
 
-        if server_ed25519 != local_ed25519 or not signature_valid:
+        if (
+            server_ed25519 != local_ed25519
+            or server_curve25519 != local_curve25519
+            or not signature_valid
+        ):
             self._device_key_mismatch = True
             invalid_reason = (
                 "identity_key_mismatch"
                 if server_ed25519 != local_ed25519
-                else "invalid_device_self_signature"
+                else (
+                    "encryption_key_mismatch"
+                    if server_curve25519 != local_curve25519
+                    else "invalid_device_self_signature"
+                )
             )
             self._device_key_recovery_status = invalid_reason
             _record_device_key_mismatch(
@@ -1862,7 +1892,11 @@ class MatrixAdapter(BasePlatformAdapter):
                 )
                 return False
             return await self._repair_server_device_keys(
-                client, olm, local_ed25519, server_ed25519
+                client,
+                olm,
+                local_ed25519,
+                local_curve25519,
+                server_ed25519,
             )
 
         return True
