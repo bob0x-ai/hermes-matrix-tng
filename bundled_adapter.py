@@ -1080,6 +1080,22 @@ class MatrixAdapter(BasePlatformAdapter):
     def __init__(self, config: PlatformConfig):
         super().__init__(config, Platform.MATRIX)
 
+        # Session-key namespace this adapter serves. Resolved HERE, at
+        # construction time: under gateway.multiplex_profiles the runner
+        # builds each adapter inside that profile's runtime scope
+        # (_profile_runtime_scope → HERMES_HOME override), so this is the
+        # only moment get_active_profile_name() reports the adapter's OWN
+        # profile. A lazy first-message resolution would see the process
+        # default and mis-key every secondary-profile session — the exact
+        # failure mode this adapter's clarify intercept exists to fix.
+        # (kernel@neurosovereign, 2026-08-10)
+        try:
+            from hermes_cli.profiles import get_active_profile_name
+
+            self._cached_adapter_profile = get_active_profile_name() or "default"
+        except Exception:
+            self._cached_adapter_profile = "default"
+
         self.max_message_length = _resolve_max_message_length(config)
         # Mirror other platform adapters for tests/tooling that read MAX_MESSAGE_LENGTH.
         self.MAX_MESSAGE_LENGTH = self.max_message_length
@@ -4438,6 +4454,104 @@ class MatrixAdapter(BasePlatformAdapter):
             ),
             profile=event.source.profile,
         )
+
+    # ------------------------------------------------------------------
+    # Multiplex clarify-reply intercept
+    # ------------------------------------------------------------------
+    # Under gateway.multiplex_profiles, the runner registers pending clarify
+    # entries under the profile-namespaced session key
+    # (agent:<profile>:matrix:dm:<room> — see ctx.session_key in
+    # gateway/run.py's _clarify_callback_sync). The core busy-guard path in
+    # BasePlatformAdapter.handle_message builds its lookup key WITHOUT the
+    # profile argument, so on this deployment it resolves to agent:main:...
+    # and misses the pending entry. The user's answer to a clarify then gets
+    # queued behind the very turn that is blocked waiting for it, and the
+    # session hangs until the clarify timeout or /stop.
+    #
+    # Hermes core is intentionally never patched here: we resolve clarify
+    # replies at Matrix ingress, before core dispatch, using the adapter's
+    # own profile-namespaced key. This uses only the public clarify_gateway
+    # API and mirrors the runner's intercept semantics
+    # (resolve_text_response_for_session), so behavior is identical to the
+    # working non-busy path. In single-profile mode the keys already match
+    # and this intercept is an equivalent no-op.
+    # (kernel@neurosovereign, 2026-08-10)
+
+    def _adapter_profile_name(self) -> str:
+        """Profile namespace this adapter serves ('default' when not multiplexed).
+
+        Captured in __init__ — the only moment the runner's per-profile
+        runtime scope is active around this adapter (see __init__ comment).
+        """
+        return getattr(self, "_cached_adapter_profile", None) or "default"
+
+    def _session_key_for_event(self, event: MessageEvent) -> str:
+        """Session key as the runner computes it (profile-namespaced)."""
+        from gateway.session import build_session_key
+
+        return build_session_key(
+            event.source,
+            group_sessions_per_user=self.config.extra.get(
+                "group_sessions_per_user", True
+            ),
+            thread_sessions_per_user=self.config.extra.get(
+                "thread_sessions_per_user", False
+            ),
+            profile=self._adapter_profile_name(),
+        )
+
+    def _try_resolve_pending_clarify(self, event: MessageEvent) -> bool:
+        """Resolve a pending clarify from an inbound text event.
+
+        Returns True when the event answered a pending clarify and must NOT
+        continue through core dispatch (the blocked agent thread resumes and
+        produces the next user-facing message itself).
+        """
+        if event.message_type != MessageType.TEXT or not (event.text or "").strip():
+            return False
+        reply = event.text.strip()
+        # Mirror the runner's intercept: slash commands are never clarify
+        # answers. /stop must stay reachable as the escape hatch while a
+        # clarify is pending (especially open-ended ones, which accept any
+        # text — the command would otherwise be swallowed as the answer).
+        if reply.startswith("/"):
+            return False
+        try:
+            from tools import clarify_gateway as _clarify_mod
+        except Exception:
+            return False
+        session_key = self._session_key_for_event(event)
+        if _clarify_mod.get_pending_for_session(
+            session_key, include_choice_prompts=True
+        ) is None:
+            return False
+        if not _clarify_mod.resolve_text_response_for_session(
+            session_key, reply
+        ):
+            return False
+        logger.info(
+            "[Matrix] Resolved pending clarify at ingress (session=%s)",
+            session_key,
+        )
+        # The clarify callback paused this chat's typing indicator while the
+        # prompt waited; the agent resumes immediately, so restore it — the
+        # runner's intercept does the same for adapters it reaches.
+        try:
+            self.resume_typing_for_chat(event.source.chat_id)
+        except Exception:
+            logger.debug("Matrix: failed to resume typing after clarify", exc_info=True)
+        return True
+
+    async def handle_message(self, event: MessageEvent) -> None:
+        """Clarify-reply-aware entry point around the core dispatch path.
+
+        Resolves pending clarify replies before the core busy-guard can
+        mis-key them (see block comment above), then delegates everything
+        else to BasePlatformAdapter.handle_message unchanged.
+        """
+        if self._message_handler and self._try_resolve_pending_clarify(event):
+            return
+        await super().handle_message(event)
 
     def _enqueue_text_event(self, event: MessageEvent) -> None:
         """Buffer a text event and reset the flush timer."""
