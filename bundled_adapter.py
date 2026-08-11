@@ -938,7 +938,7 @@ def _pre_sanitize_matrix_markdown(text: str) -> str:
 
 
 def check_matrix_requirements() -> bool:
-    """Return True if the Matrix adapter can be used.
+    """Return True if the Matrix adapter dependencies are available.
 
     Lazy-installs the full ``platform.matrix`` feature group via
     ``tools.lazy_deps.ensure_and_bind`` whenever any of the declared
@@ -947,17 +947,12 @@ def check_matrix_requirements() -> bool:
     ``import mautrix``, which left the other four packages uninstalled
     forever and broke E2EE connect with ``No module named 'asyncpg'``
     (#31116).  Rebinds module-level type globals on success.
-    """
-    token = os.getenv("MATRIX_ACCESS_TOKEN", "")
-    password = os.getenv("MATRIX_PASSWORD", "")
-    homeserver = os.getenv("MATRIX_HOMESERVER", "")
 
-    if not token and not password:
-        logger.debug("Matrix: neither MATRIX_ACCESS_TOKEN nor MATRIX_PASSWORD set")
-        return False
-    if not homeserver:
-        logger.warning("Matrix: MATRIX_HOMESERVER not set")
-        return False
+    This registry hook must not inspect credentials: multiplex gateways keep
+    secondary-profile secrets out of the process-global environment.  The
+    profile-aware ``is_connected`` hook and adapter construction validate the
+    homeserver and credentials after the profile scope has been installed.
+    """
 
     # Check whether any package in the platform.matrix feature group is
     # missing.  ``feature_missing`` is cheap (per-spec importlib.metadata
